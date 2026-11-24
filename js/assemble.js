@@ -50,8 +50,23 @@
   // 合成 a dog peeing on a car wheel，比 a dog, peeing on... 更自然。
   function looksLikeRelationAction(phrase) {
     return /^[a-z]+ing\b/i.test(phrase) &&
-      /\b(on|at|in|toward|towards|after|by|against|into|over|under|next to)\b/i.test(phrase);
+      /\b(on|at|in|toward|towards|after|by|against|into|over|under|next to|from|onto|along|through|between|near|behind|in front of|across from)\b/i.test(phrase);
   }
+
+  // 简单动作（walking / sitting / standing）紧跟在人物后面时不加逗号：
+  // a girl walking on the beach 比 a girl, walking, on the beach 自然。
+  function looksLikeBarePose(phrase) {
+    return /^[a-z]+ing$/i.test(phrase);
+  }
+
+  // 关系句拆框后，场景框里是方位短语（on the beach / in front of the window）。
+  // 它应紧贴前面的动作，拼回 walking on the beach。
+  function looksLikeLocativeScene(phrase) {
+    return /^(on|onto|in|into|at|by|near|under|behind|next to|between|in front of|across from|across|along|through|from|toward|towards|against|inside|outside|over)\b/i.test(phrase);
+  }
+
+  // 日常动物主体：只补真实摄影质感，不补人像皮肤纹理。
+  const ANIMAL_SUBJECT_RE = /\b(?:cat|dog|puppy|kitten|rabbit|bunny|fox|deer|horse|bird|butterfly|dragon|wolf|shiba|retriever|golden retriever|corgi|poodle|husky|samoyed|collie|labrador|shepherd|bichon|pomeranian|ragdoll|shorthair|siamese|persian|maine coon|tabby|tuxedo|hamster|guinea pig|squirrel|hedgehog|parrot|pigeon|duck|chicken|goose|pig|cow|sheep|goat|donkey|camel|panda|monkey|elephant|lion|tiger|bear|penguin|dolphin|whale|shark|sea turtle|octopus|crab|frog|snake|lizard|spider|ant|bee|dragonfly|goldfish|koi)\b/i;
 
   function selectQuality(styleText, allText, hasPerson) {
     const nonPhoto = NON_PHOTO_RE.test(styleText);
@@ -80,10 +95,20 @@
         if (seen[k] || alreadyCovered(phrase, allText)) return;
         seen[k] = true;
 
-        if (def.key === 'pose' && lastPhraseSlot === 'person' && looksLikeRelationAction(phrase)) {
+        if (def.key === 'pose' && lastPhraseSlot === 'person' &&
+            (looksLikeRelationAction(phrase) || looksLikeBarePose(phrase))) {
           phrases[phrases.length - 1] += ' ' + phrase;
           allText = phrases.join(', ');
           lastPhraseSlot = 'pose';
+          changed = true;
+          return;
+        }
+
+        // 姿态框是动作、场景框是方位短语时，合成 walking on the beach。
+        if (def.key === 'scene' && lastPhraseSlot === 'pose' && looksLikeLocativeScene(phrase)) {
+          phrases[phrases.length - 1] += ' ' + phrase;
+          allText = phrases.join(', ');
+          lastPhraseSlot = 'scene';
           changed = true;
           return;
         }
@@ -112,7 +137,7 @@
     const styleSlot = slots.style || { en: '' };
     const personSlot = slots.person || { en: '' };
     const personText = personSlot.en || '';
-    const animalOnly = /(cat|dog|rabbit|fox|deer|horse|bird|butterfly|dragon|wolf|kitten|puppy|shiba|retriever)/i.test(personText) &&
+    const animalOnly = ANIMAL_SUBJECT_RE.test(personText) &&
       !/(woman|man|girl|boy|person|child|model|knight|elf|princess|prince|witch|mage|warrior|dancer|student|detective|cowboy|pirate|ninja|nun|maid|butler)/i.test(personText);
     const quality = selectQuality(styleSlot.en || '', allText, !!personText.trim() && !animalOnly);
 

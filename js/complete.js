@@ -11,6 +11,9 @@
   const TR = T2I.Translator;
   const SF = T2I.SlotFill;
 
+  // 日常动物主体：只补真实摄影质感，不补人像皮肤纹理。
+  const ANIMAL_SUBJECT_RE = /\b(?:cat|dog|puppy|kitten|rabbit|bunny|fox|deer|horse|bird|butterfly|dragon|wolf|shiba|retriever|golden retriever|corgi|poodle|husky|samoyed|collie|labrador|shepherd|bichon|pomeranian|ragdoll|shorthair|siamese|persian|maine coon|tabby|tuxedo|hamster|guinea pig|squirrel|hedgehog|parrot|pigeon|duck|chicken|goose|pig|cow|sheep|goat|donkey|camel|panda|monkey|elephant|lion|tiger|bear|penguin|dolphin|whale|shark|sea turtle|octopus|crab|frog|snake|lizard|spider|ant|bee|dragonfly|goldfish|koi)\b/i;
+
   function categoriesIn(text) {
     return TR.scanEn(text || '').map(function (m) { return m.entry.category; });
   }
@@ -54,7 +57,7 @@
       added.push({ slot: 'style', zh: base.zh, en: base.en, reason: base.reason });
 
       const personText = slots.person.en.trim();
-      const animalOnly = /(cat|dog|rabbit|fox|deer|horse|bird|butterfly|dragon|wolf|kitten|puppy|shiba|retriever)/i.test(personText) &&
+      const animalOnly = ANIMAL_SUBJECT_RE.test(personText) &&
         !/(woman|man|girl|boy|person|child|model|knight|elf|princess|prince|witch|mage|warrior|dancer|student|detective|cowboy|pirate|ninja|nun|maid|butler)/i.test(personText);
       if (personText && !animalOnly) {
         const texture = {

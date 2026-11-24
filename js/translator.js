@@ -54,7 +54,7 @@
   ].forEach(function (w) { PRE_PERSON_EN[w] = true; });
 
   const PLACE_AT = /(station|airport|doorway|bus stop|platform|entrance|corner)/i;
-  const PLACE_ON = /(street|beach|rooftop|bridge|stage|grass|snowfield|boardwalk|field|road|roadside|summit|mountain|floor|bench)/i;
+  const PLACE_ON = /(street|beach|rooftop|bridge|stage|grass|snowfield|boardwalk|field|road|roadside|summit|mountain|floor|ground|bench|balcony)/i;
   const PLACE_BY = /(window|wall|seaside|lakeside|riverside|railing|pier|harbor|harbour|lighthouse)/i;
   const PLACE_IN = /(cafe|restaurant|bar|library|bookstore|bedroom|living room|kitchen|bathroom|office|classroom|hotel room|forest|park|garden|village|museum|gallery|studio|car|room)/i;
 
@@ -72,14 +72,105 @@
   // 关系句式的零件类别。动作不只来自 pose，也包括「对着镜头微笑」这类表情。
   const ACTION_CATEGORIES = ['pose', 'expression', 'action'];
   const TARGET_CATEGORIES = ['object', 'scene', 'camera', 'light', 'outfit', 'accessory', 'subject'];
-  const RELATION_MARKERS = ['对着', '朝着', '向着', '冲着', '冲向', '给', '往', '向', '朝', '在', '对'];
+  const RELATION_MARKERS = ['对着', '朝着', '向着', '冲着', '冲向', '沿着', '穿过', '给', '往', '向', '朝', '从', '在', '对', '把'];
   const EXCRETION_RE = /^(peeing|urinating|pooping|defecating|spraying|marking)\b/i;
-  const MOVEMENT_RE = /^(running|walking|jumping|charging|flying|swimming|driving|riding|climbing|chasing)\b/i;
+  const MOVEMENT_RE = /^(running|walking|jumping|charging|flying|swimming|driving|riding|climbing|chasing|skipping)\b/i;
   const GAZE_RE = /^(looking|gazing|staring|smiling|grinning|laughing|barking|growling|pointing|waving|glancing)\b/i;
 
   const exactZh = Object.create(null);
   const exactEn = Object.create(null);
 
+  // 单字动作别名（飞 / 打 / 拍…）不应把未知复合词拆成「已知字 + 残片」。
+  // 这里只保护最常见的未收录词，保证「飞碟」整词留在未收录列表里。
+  const PROTECTED_ZH_WORDS = ['飞碟', '飞船', '飞蛾', '飞镖', '飞艇', '飞絮', '飞鸟'];
+
+  // 中文单字别名（烟 / 笑 / 猫…）的边界。词库索引虽然按长度从长到短
+  // 排序，但更长的词不在词库里时，单字别名仍可能从词中间切开它
+  // （「抽|烟」「搞|笑」）。单字别名只允许出现在真正的词边界上：
+  // 句首/句尾、空白、标点，或「的 / 了 / 在 / 把」这类虚词旁边。
+  const ZH_BOUNDARY_CHARS = '的了着过和与或及是在有把被给对向朝往从到于为之其也都还又很太更最带个位件条双只张座片群套头身款种些上下里中旁前后边内外处间';
+  const ZH_BOUNDARY_RE = /[\s，,。.、；;：:！!？?（）()【】\[\]{}<>《》〈〉「」『』“”‘’"'…—\-·/\\|+*=&%#@~`^]/;
+  // 单字动词/颜色/外貌词可以紧贴宾语或名词（吃苹果、红裙、瘦女人），
+  // 这是汉语的正常组合，不是把词从中间切开。
+  const ZH_PREFIX_CATEGORIES = ['pose', 'expression', 'action', 'appearance', 'color', 'material', 'pattern'];
+  const ZH_ACTION_CATEGORIES = ['pose', 'expression', 'action'];
+
+  function isZhBoundary(ch) {
+    if (!ch) return true;
+    if (ZH_BOUNDARY_RE.test(ch)) return true;
+    return ZH_BOUNDARY_CHARS.indexOf(ch) !== -1;
+  }
+
+  function hasKnownAliasAt(text, index) {
+    const candidates = L.zhIndex[String(text.charAt(index) || '').toLowerCase()];
+    if (!candidates) return false;
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (text.startsWith(candidates[i].alias, index)) return true;
+    }
+    return false;
+  }
+
+  function hasActionAliasAt(text, index) {
+    const candidates = L.zhIndex[String(text.charAt(index) || '').toLowerCase()];
+    if (!candidates) return false;
+    for (let i = 0; i < candidates.length; i += 1) {
+      const cand = candidates[i];
+      if (text.startsWith(cand.alias, index) && ZH_ACTION_CATEGORIES.indexOf(cand.entry.category) !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function singleAliasAllowed(cand, source, start) {
+    const before = source.charAt(start - 1);
+    const after = source.charAt(start + cand.alias.length);
+    const leftBoundary = isZhBoundary(before);
+    const rightBoundary = isZhBoundary(after);
+    if (leftBoundary && rightBoundary) return true;
+
+    const category = cand.entry.category;
+    const prefixable = ZH_PREFIX_CATEGORIES.indexOf(category) !== -1;
+    const action = ZH_ACTION_CATEGORIES.indexOf(category) !== -1;
+
+    // 句首的动词/颜色/外貌词只有在后面确实接着已知词时才组合
+    // （吃苹果、红裙、瘦女人）；「笑点」这类未知复合词不能被拆成笑 + 点。
+    if (start === 0 && prefixable) return hasKnownAliasAt(source, start + cand.alias.length);
+    // 虚词后的单字：把书放在、她笑了、的烟。若后面紧跟已知动作，
+    // 说明这是「宾语 + 动作」，不是未知复合词的一部分。
+    if (leftBoundary && !rightBoundary && before) {
+      if (prefixable || hasActionAliasAt(source, start + cand.alias.length)) return true;
+    }
+    // 句尾的动作：他笑、她哭。名词在句尾且前面仍是汉字时（抽烟、熊猫）
+    // 不允许，否则会把更长的词切开。
+    if (rightBoundary && !leftBoundary && action) return true;
+    return false;
+  }
+
+  function shortAliasAllowed(cand, source, start) {
+    const length = cand.alias.length;
+    if (length === 1) return singleAliasAllowed(cand, source, start);
+    if (length === 2) {
+      // 双字动作短语（跳到 / 放在 / 走向）本来就是连接两个名词的动词，
+      // 不能按名词复合词的边界去卡它。
+      if (ZH_ACTION_CATEGORIES.indexOf(cand.entry.category) !== -1) return true;
+      // 双字名词也只在至少一侧是边界时命中，避免从「宣传广告设计」这类
+      // 更长复合词中间切出「广告」。
+      const before = source.charAt(start - 1);
+      const after = source.charAt(start + 2);
+      return isZhBoundary(before) || isZhBoundary(after);
+    }
+    return true;
+  }
+
+  // 规范词优先于别名：避免后补的「大门 / 玻璃窗 / 被套」被更早条目的
+  // 别名先占用，导致规范词自己反而译不出来。先登记所有规范词，再挂别名。
+  L.entries.forEach(function (entry) {
+    const zhKey = entry.zh.trim().toLowerCase();
+    const enKey = entry.en.trim().toLowerCase();
+    if (!exactZh[zhKey]) exactZh[zhKey] = entry;
+    if (!exactEn[enKey]) exactEn[enKey] = entry;
+  });
   L.entries.forEach(function (entry) {
     entry.zhAliases.forEach(function (alias) {
       const key = alias.trim().toLowerCase();
@@ -100,6 +191,9 @@
       const candidates = L.zhIndex[ch.toLowerCase()];
       let found = null;
       if (candidates) {
+        // 索引已按别名长度从长到短排序：同一位置只认最长命中。
+        // 若最长命中不是合法词边界，直接前进一格，不再退回更短别名把
+        // 已经构成的长词切开（「抽烟」不能退成「抽」+「烟」）。
         for (let c = 0; c < candidates.length; c += 1) {
           const cand = candidates[c];
           const slice = source.slice(i, i + cand.alias.length);
@@ -108,6 +202,12 @@
             break;
           }
         }
+      }
+      if (found && !shortAliasAllowed(found, source, i)) found = null;
+      if (found && found.alias.length === 1 && PROTECTED_ZH_WORDS.some(function (word) {
+        return source.startsWith(word, i);
+      })) {
+        found = null;
       }
       if (found) {
         matches.push({
@@ -125,7 +225,8 @@
   }
 
   function isWordChar(ch) {
-    return /[A-Za-z0-9]/.test(ch || '');
+    // 连字符和撇号也算词内字符：short word 不能在 anti-smoking / don't 里命中。
+    return /[A-Za-z0-9'’\-]/.test(ch || '');
   }
 
   function scanEn(text) {
@@ -380,7 +481,15 @@
       return m.entry.category === 'style' || m.entry.category === 'quality' || m.entry.category === 'mood';
     });
     if (!relevant.length) return null;
-    return relevant.map(function (m) { return m.entry.en; }).join(', ');
+    const out = relevant.map(function (m) { return m.entry.en; }).join(', ');
+    // 同一片段里还夹着动作 / 物体时（拒绝抽烟的广告）不能因为落到画风框
+    // 就把主题动作吞掉；把非画风零件放在媒介词前面。
+    const extras = matches.filter(function (m) {
+      return m.entry.category !== 'style' && m.entry.category !== 'quality' &&
+        m.entry.category !== 'mood' && m.entry.category !== 'connector';
+    });
+    if (!extras.length) return out;
+    return joinWords(extras.map(function (m) { return m.entry.en; }).concat([out]));
   }
 
   function genericComposition(phrase, matches) {
@@ -418,19 +527,27 @@
 
   function splitRelationSuffix(raw) {
     const text = String(raw || '').trim();
-    const m = text.match(/(上面|旁边|上|里|中|旁|边|前|后|下)$/);
+    // 「河边 / 路边 / 旁边」本身可能就是完整地点词，不能把「边」误拆成方位。
+    if (exactZh[text.toLowerCase()]) return { text: text, suffix: '' };
+    const m = text.match(/(后面|前面|下面|里面|上面|旁边|之间|中间|附近|对面|之下|之中|上|里|中|旁|边|前|后|下)$/);
     if (!m) return { text: text, suffix: '' };
     return { text: text.slice(0, text.length - m[1].length).trim(), suffix: m[1] };
   }
 
   function relationPrep(marker, actionEn, suffix) {
     const action = String(actionEn || '');
-    if (suffix === '里' || suffix === '中') return 'in';
+    if (suffix === '之间' || suffix === '中间') return 'between';
+    if (suffix === '附近') return 'near';
+    if (suffix === '对面') return 'across from';
+    if (suffix === '里' || suffix === '里面' || suffix === '中' || suffix === '之中') return 'in';
     if (suffix === '旁边' || suffix === '旁' || suffix === '边') return 'next to';
-    if (suffix === '前') return 'in front of';
-    if (suffix === '后') return 'behind';
-    if (suffix === '下') return 'under';
+    if (suffix === '前面' || suffix === '前') return 'in front of';
+    if (suffix === '后面' || suffix === '后') return 'behind';
+    if (suffix === '下面' || suffix === '下' || suffix === '之下') return 'under';
     if (suffix === '上面' || suffix === '上') return 'on';
+    if (marker.token === '沿着') return 'along';
+    if (marker.token === '穿过') return 'through';
+    if (marker.token === '从') return 'from';
     if (EXCRETION_RE.test(action)) return 'on';
     if (marker.token === '在' || marker.token === '给' || marker.token === '往') return 'on';
     if (GAZE_RE.test(action)) return 'at';
@@ -445,7 +562,17 @@
     if (/^(he|she|it|they|we|i|you)\b/i.test(t)) return t;
     if (/^(people|children|men|women|feet|teeth|mice|geese)$/i.test(t)) return t;
     if (/(?:s|es)$/i.test(t) && !/(glass|grass|dress|bus|class|lens|series|species)$/i.test(t)) return t;
+    // utility / university / European 等拼写以元音字母开头但读辅音，仍用 a。
+    if (/^(uni|uti|use|user|eu|one|once)/i.test(t)) return 'a ' + t;
     return (/^[aeiou]/i.test(t) ? 'an ' : 'a ') + t;
+  }
+
+  function pluralizeNoun(text) {
+    const t = String(text || '').trim();
+    if (!t || U.hasCjk(t)) return t;
+    if (/(s|x|z|ch|sh)$/i.test(t)) return t + 'es';
+    if (/[^aeiou]y$/i.test(t)) return t.slice(0, -1) + 'ies';
+    return t + 's';
   }
 
   function uniqueList(list) {
@@ -456,7 +583,7 @@
     return out;
   }
 
-  function decomposeRelation(text) {
+  function decomposeSubjectRelation(text) {
     const source = U.normalizeSpace(text);
     if (!source || !U.hasCjk(source)) return null;
 
@@ -477,7 +604,17 @@
     });
     let targetMatch = null;
     let actionMatch = null;
-    for (let i = 0; i < targetCandidates.length; i += 1) {
+    let passThroughAction = null;
+    // 「穿过森林」没有显式动作，关系词本身承担 through 的动作；目标后的
+    // 「紧张」等氛围词不能再被当成 action。
+    if (marker.token === '穿过') {
+      const target = targetCandidates[0];
+      if (!target) return null;
+      targetMatch = target;
+      actionMatch = { entry: null, alias: '穿过', start: target.end, end: target.end };
+      passThroughAction = { en: 'walking through', zh: '穿过', matches: [], unknown: [] };
+    }
+    for (let i = 0; !actionMatch && i < targetCandidates.length; i += 1) {
       const target = targetCandidates[i];
       const action = matches.find(function (m) {
         return m.start >= target.end && ACTION_CATEGORIES.indexOf(m.entry.category) !== -1;
@@ -501,8 +638,39 @@
     const objectText = objectParts.text;
     if (!objectText) return null;
 
+    // 「从 A 跳到 B / 把 A 放在 B」：动作后的第二个目标是终点/落点，
+    // 不能当成「的搞笑画面」这种氛围尾巴。
+    let secondaryObjectText = '';
+    let secondarySuffix = '';
+    let secondaryResult = null;
+    let secondaryEn = '';
+    let secondaryZh = '';
+    let moodStart = actionMatch.end;
+    if (marker.token === '从' || marker.token === '把') {
+      const tailTargets = matches.filter(function (m) {
+        return m.start >= actionMatch.end &&
+          TARGET_CATEGORIES.indexOf(m.entry.category) !== -1 &&
+          ['subject', 'outfit', 'accessory'].indexOf(m.entry.category) === -1;
+      });
+      const candidate = tailTargets[0];
+      if (candidate) {
+        const between = source.slice(actionMatch.end, candidate.start)
+          .replace(/[到在往上下里中旁前后面之间，,、\s的]/g, '');
+        if (!between) {
+          secondaryObjectText = source.slice(candidate.start, candidate.end);
+          const after = source.slice(candidate.end);
+          const suffixMatch = after.match(/^(之间|中间|上面|旁边|上|里|中|旁|前|后|下)/);
+          secondarySuffix = suffixMatch ? suffixMatch[1] : '';
+          secondaryResult = translateZhPhrase(secondaryObjectText, { slot: 'scene', allowRelation: false });
+          secondaryEn = secondaryResult.en || secondaryObjectText;
+          secondaryZh = secondaryResult.zh || secondaryObjectText;
+          moodStart = candidate.end + secondarySuffix.length;
+        }
+      }
+    }
+
     // 目标词后面的「的搞笑画面」是氛围，不是动作的一部分。
-    let moodText = source.slice(actionMatch.end).trim()
+    let moodText = source.slice(moodStart).trim()
       .replace(/^[的地得，,、\s]+/, '');
     let moodResult = null;
     if (moodText && stripStopZh(moodText)) {
@@ -511,7 +679,7 @@
     }
 
     const subjectResult = translateZhPhrase(subjectText, { slot: 'person', allowRelation: false });
-    const actionResult = translateZhPhrase(actionMatch.alias, { slot: 'pose', allowRelation: false });
+    const actionResult = passThroughAction || translateZhPhrase(actionMatch.alias, { slot: 'pose', allowRelation: false });
     const objectResult = translateZhPhrase(objectText, { slot: 'scene', allowRelation: false });
 
     const subjectEn = withIndefiniteArticle(subjectResult.en || subjectText);
@@ -532,25 +700,55 @@
       const targetCategory = targetMatch ? targetMatch.entry.category : '';
       const excretionTarget = EXCRETION_RE.test(actionEn) &&
         (targetCategory === 'object' || targetCategory === 'scene');
-      if (!excretionTarget) return null;
+      // 「在厨房做饭 / 在咖啡馆聊天」是日常高频的「地点 + 动作」，
+      // 只要动作后没有另一个宾语（如「在客厅修理台灯」），就按 in 关系组装。
+      const locationScene = marker.token === '在' && targetCategory === 'scene';
+      const tailTarget = locationScene && matches.some(function (m) {
+        return m.start >= actionMatch.end &&
+          TARGET_CATEGORIES.indexOf(m.entry.category) !== -1 &&
+          ['subject', 'outfit', 'accessory'].indexOf(m.entry.category) === -1;
+      });
+      if (!excretionTarget && (!locationScene || tailTarget)) return null;
     }
 
     let prep = relationPrep(marker, actionEn, objectParts.suffix);
     if (!objectParts.suffix && marker.token === '在' && targetMatch && targetMatch.entry.category === 'scene') {
-      prep = 'in';
+      prep = placePrep(objectEn);
     }
     // 动作词本身已带介词（peeing on）时不再重复。
-    if (/\b(on|at|in|toward|towards|after|by|against|into|over|under)\s*$/i.test(actionEn)) prep = '';
-    const targetPhraseEn = /^camera$/i.test(objectEn) ? 'the camera' : withIndefiniteArticle(objectEn);
-    const relationEn = prep
-      ? joinWords([actionEn, prep, targetPhraseEn])
-      : joinWords([actionEn, targetPhraseEn]);
+    if (/\b(on|at|in|toward|towards|after|by|against|into|over|under|from|through|along)\s*$/i.test(actionEn)) prep = '';
+    if (prep === 'between' && !U.hasCjk(objectEn)) objectEn = pluralizeNoun(objectEn);
+    let targetPhraseEn = /^camera$/i.test(objectEn) ? 'the camera' : withIndefiniteArticle(objectEn);
 
+    let relationEn;
     let relationZh;
-    if (marker.token === '给' || marker.token === '往' || marker.token === '在') {
-      relationZh = '在' + objectZh + (objectParts.suffix || '上');
+    if (secondaryResult) {
+      const secondPhraseEn = withIndefiniteArticle(secondaryEn);
+      if (marker.token === '把') {
+        const destPrep = relationPrep({ token: '在' }, actionEn, secondarySuffix || '上');
+        relationEn = joinWords([actionEn, targetPhraseEn, destPrep, secondPhraseEn]);
+        relationZh = '把' + objectZh + actionZh + secondaryZh + (secondarySuffix || '上');
+      } else {
+        const destPrep = secondarySuffix === '上' || secondarySuffix === '上面'
+          ? 'onto'
+          : (secondarySuffix === '里' || secondarySuffix === '中' ? 'into' : 'to');
+        relationEn = joinWords([actionEn, 'from', targetPhraseEn, destPrep, secondPhraseEn]);
+        relationZh = '从' + objectZh + actionZh + secondaryZh;
+      }
+    } else if (prep) {
+      relationEn = joinWords([actionEn, prep, targetPhraseEn]);
+      if (marker.token === '给' || marker.token === '往' || marker.token === '在') {
+        relationZh = '在' + objectZh + (objectParts.suffix || '上');
+      } else {
+        relationZh = marker.token + objectZh;
+      }
     } else {
-      relationZh = marker.token + objectZh;
+      relationEn = joinWords([actionEn, targetPhraseEn]);
+      if (marker.token === '给' || marker.token === '往' || marker.token === '在') {
+        relationZh = '在' + objectZh + (objectParts.suffix || '上');
+      } else {
+        relationZh = marker.token + objectZh;
+      }
     }
     const actionZhFull = relationZh + actionZh;
 
@@ -584,6 +782,16 @@
         unknown: objectResult.unknown || []
       }
     ];
+    if (secondaryResult) {
+      segments.push({
+        text: secondaryObjectText,
+        zh: secondaryZh,
+        en: secondaryEn,
+        slot: 'scene',
+        matches: secondaryResult.matches || [],
+        unknown: secondaryResult.unknown || []
+      });
+    }
     if (moodResult) {
       segments.push({
         text: moodText,
@@ -602,6 +810,11 @@
     (objectResult.matches || []).forEach(function (m) {
       if (allMatches.indexOf(m) === -1) allMatches.push(m);
     });
+    if (secondaryResult) {
+      (secondaryResult.matches || []).forEach(function (m) {
+        if (allMatches.indexOf(m) === -1) allMatches.push(m);
+      });
+    }
     if (moodResult) {
       (moodResult.matches || []).forEach(function (m) {
         if (allMatches.indexOf(m) === -1) allMatches.push(m);
@@ -611,6 +824,7 @@
       (subjectResult.unknown || [])
         .concat(actionResult.unknown || [])
         .concat(objectResult.unknown || [])
+        .concat(secondaryResult ? secondaryResult.unknown || [] : [])
         .concat(moodResult ? moodResult.unknown || [] : [])
     );
 
@@ -622,6 +836,320 @@
       unknown: unknown,
       segments: segments
     };
+  }
+
+
+  // ── 动作 + 地点关系：走在沙滩上 / 坐在椅子上 / 跑过街道 ──────────
+  // 这类句子没有显式「谁」，也可能把动作写在关系词前面。先拆成
+  // 「动作（姿态框）+ 方位短语（场景框）」，再由 assemble 粘回
+  // walking on the beach，避免整句挤进姿态框、场景框空白。
+
+  function scanZhFrom(source, offset) {
+    return scanZh(source.slice(offset)).map(function (m) {
+      return { entry: m.entry, alias: m.alias, start: m.start + offset, end: m.end + offset };
+    });
+  }
+
+  // 在 source 的 [start, end) 里找恰好结束于 end 的动作别名。
+  // 不直接用 scanZh，是因为「坐在椅子上」会被整条长别名吃掉。
+  function actionEndingAt(source, start, end) {
+    const candidates = L.zhIndex[String(source.charAt(start) || '').toLowerCase()] || [];
+    let best = null;
+    for (let i = 0; i < candidates.length; i += 1) {
+      const cand = candidates[i];
+      if (ZH_ACTION_CATEGORIES.indexOf(cand.entry.category) === -1) continue;
+      if (cand.alias.length > 3) continue;
+      if (start + cand.alias.length !== end) continue;
+      if (!source.startsWith(cand.alias, start)) continue;
+      if (!best || cand.alias.length > best.alias.length) best = cand;
+    }
+    return best;
+  }
+
+  function actionStartingAt(source, start) {
+    const candidates = L.zhIndex[String(source.charAt(start) || '').toLowerCase()] || [];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const cand = candidates[i];
+      if (ZH_ACTION_CATEGORIES.indexOf(cand.entry.category) === -1) continue;
+      if (cand.alias.length > 4) continue;
+      if (source.startsWith(cand.alias, start)) return cand;
+    }
+    return null;
+  }
+
+  function locativeSuffixAt(source, index) {
+    const m = String(source.slice(index)).match(/^(后面|前面|下面|里面|上面|旁边|之间|中间|附近|对面|之下|之中|上|里|中|旁|边|前|后|下)/);
+    return m ? m[1] : '';
+  }
+
+  function locativePrep(marker, actionEn, suffix, targetEn, targetCategory) {
+    if (/^lean/i.test(actionEn) && (suffix === '上' || suffix === '上面')) return 'against';
+    if (/^lean/i.test(actionEn) && (suffix === '边' || suffix === '旁' || suffix === '旁边')) return 'by';
+    if (marker === '过') return 'across';
+    if (marker === '穿过') return 'through';
+    if (marker === '沿着') return 'along';
+    if (marker === '从') return 'from';
+    if (marker === '到') return /jump|climb|step|sit|lie/i.test(actionEn) ? 'onto' : 'to';
+    if (marker === '向' || marker === '朝' || marker === '往') return 'toward';
+    if (suffix) return relationPrep({ token: marker }, actionEn, suffix);
+    if (marker === '在') {
+      if (targetCategory === 'object') {
+        if (/window|wall/i.test(targetEn)) return 'by';
+        return 'on';
+      }
+      return placePrep(targetEn);
+    }
+    return relationPrep({ token: marker }, actionEn, suffix);
+  }
+
+  function locativePhrase(prep, targetEn, targetCategory) {
+    const text = String(targetEn || '').trim();
+    if (!text) return '';
+    if (!prep) return text;
+    if (/^(on|onto|in|into|at|by|near|under|behind|next to|between|in front of|across|along|through|from|toward|towards|against|inside|outside|over)\b/i.test(text)) return text;
+    const isObject = targetCategory === 'object';
+    if (prep === 'between') {
+      return 'between ' + (isObject ? pluralizeNoun(text) : text);
+    }
+    if (isObject) {
+      // 窗/墙是画面里默认被指认的那一个：standing in front of the window。
+      if (/^(window|wall)$/i.test(text)) return prep + ' the ' + text;
+      return prep + ' ' + withIndefiniteArticle(text);
+    }
+    // 地面/街道/沙滩这类「一整片」的地点用 the：walking on the beach；
+    // 咖啡馆、森林、河边等可数/泛指地点用 a：in a cafe / through a forest。
+    if ((prep === 'on' || prep === 'across') &&
+        /(beach|shore|coast|street|road|sidewalk|pavement|ground|floor|grass|snow|bridge|stage|rooftop)/i.test(text)) {
+      return prep + ' the ' + text;
+    }
+    return prep + ' ' + withIndefiniteArticle(text);
+  }
+
+  function isStyleLikeResult(result) {
+    if (!result || !result.en) return false;
+    const matches = result.matches || [];
+    return matches.length > 0 && matches.every(function (m) {
+      return ['mood', 'style', 'quality', 'connector'].indexOf(m.entry.category) !== -1;
+    });
+  }
+
+  function locativeResult(source, subjectText, subjectResult, actionCand, actionResult,
+    marker, targetText, targetResult, suffix, moodText, moodResult) {
+    let actionEn = actionResult.en || actionCand.alias;
+    if (/^(靠|倚)$/.test(actionCand.alias)) actionEn = 'leaning';
+    const actionZh = actionResult.zh || actionCand.alias;
+    const targetEn = targetResult.en || targetText;
+    const targetZh = targetResult.zh || targetText;
+    const targetCategory = targetResult.matches && targetResult.matches[0]
+      ? targetResult.matches[0].entry.category
+      : 'scene';
+    const prep = locativePrep(marker, actionEn, suffix, targetEn, targetCategory);
+    const locEn = locativePhrase(prep, targetEn, targetCategory);
+    const locZh = targetZh + (suffix ? suffix : '');
+
+    const subjectEn = subjectResult && subjectResult.en
+      ? withIndefiniteArticle(subjectResult.en)
+      : subjectText;
+    const relationEn = joinWords([actionEn, locEn]);
+    const moodEn = moodResult ? (moodResult.en || '') : '';
+    const moodZh = moodResult ? (moodResult.zh || moodText) : '';
+
+    const segments = [];
+    if (subjectText) {
+      segments.push({
+        text: subjectText,
+        zh: subjectResult.zh || subjectText,
+        en: subjectEn,
+        slot: 'person',
+        matches: subjectResult.matches || [],
+        unknown: subjectResult.unknown || []
+      });
+    }
+    segments.push({
+      text: actionCand.alias,
+      zh: actionZh,
+      en: actionEn,
+      slot: 'pose',
+      matches: actionResult.matches || [],
+      unknown: actionResult.unknown || []
+    });
+    segments.push({
+      text: targetText,
+      zh: locZh,
+      en: locEn,
+      slot: 'scene',
+      matches: targetResult.matches || [],
+      unknown: targetResult.unknown || []
+    });
+    if (moodResult && moodEn) {
+      segments.push({
+        text: moodText,
+        zh: moodZh,
+        en: moodEn,
+        slot: 'style',
+        matches: moodResult.matches || [],
+        unknown: moodResult.unknown || []
+      });
+    }
+
+    const allMatches = uniqueList((subjectResult ? subjectResult.matches || [] : [])
+      .concat(actionResult.matches || [])
+      .concat(targetResult.matches || [])
+      .concat(moodResult ? moodResult.matches || [] : []));
+    const unknown = uniqueList((subjectResult ? subjectResult.unknown || [] : [])
+      .concat(actionResult.unknown || [])
+      .concat(targetResult.unknown || [])
+      .concat(moodResult ? moodResult.unknown || [] : []));
+
+    return {
+      relation: marker,
+      en: U.joinPhrasesEn([subjectEn, relationEn, moodEn].filter(Boolean)),
+      zh: U.joinPhrasesZh([subjectResult ? subjectResult.zh || subjectText : '', actionZh, locZh, moodZh].filter(Boolean)),
+      matches: allMatches,
+      unknown: unknown,
+      segments: segments
+    };
+  }
+
+  function decomposeLocativeRelation(text) {
+    const source = U.normalizeSpace(text);
+    if (!source || !U.hasCjk(source)) return null;
+
+    const matches = scanZh(source);
+    let subjectText = '';
+    let subjectEnd = 0;
+    let subjectResult = null;
+    const subjectMatch = matches.find(function (m) {
+      return m.entry.category === 'subject' && m.start === 0;
+    });
+    if (subjectMatch) {
+      subjectEnd = subjectMatch.end;
+      subjectText = source.slice(0, subjectEnd).trim();
+      subjectResult = translateZhPhrase(subjectText, { slot: 'person', allowRelation: false });
+    } else {
+      // 「她 / 他 / 我」等代词不一定在词典里，仍可当作人物前缀。
+      const pronoun = source.match(/^(她们|他们|我们|你们|她|他|我|你)/);
+      if (pronoun) {
+        subjectEnd = pronoun[1].length;
+        subjectText = pronoun[1];
+        const pronounEn = {
+          '她': 'a woman', '他': 'a man', '她们': 'people', '他们': 'people',
+          '我们': 'people', '你们': 'people', '我': 'a person', '你': 'a person'
+        };
+        subjectResult = { en: pronounEn[subjectText] || 'a person', zh: subjectText, matches: [], unknown: [] };
+      }
+      // 单字动物主语（狗 / 猫 / 狼…）后面直接跟动作时，scanZh 的通用边界
+      // 规则会把它当成未知长词的一部分。这里只在「后面确实还能拆出
+      // 动作 + 地点关系」时才认作主语，避免把「熊猫」之类的长词切开。
+      if (!subjectResult) {
+        const first = source.charAt(0);
+        const firstCands = L.zhIndex[String(first).toLowerCase()] || [];
+        const singleSubject = firstCands.find(function (c) {
+          return c.entry.category === 'subject' && c.alias.length === 1 && source.startsWith(c.alias, 0);
+        });
+        if (singleSubject) {
+          const rest = source.slice(1);
+          const restMatches = scanZh(rest);
+          const restMarker = restMatches.some(function (m) {
+            return ['在', '到', '过', '沿着', '穿过', '从', '向', '朝', '往'].some(function (token) {
+              return m.alias === token || rest.indexOf(token) !== -1;
+            });
+          });
+          if (restMarker) {
+            subjectEnd = 1;
+            subjectText = first;
+            subjectResult = translateZhPhrase(subjectText, { slot: 'person', allowRelation: false });
+          }
+        }
+      }
+    }
+    const predicateStart = subjectEnd;
+
+    // 情况一：关系词在前，地点在后，动作最后（沿着河边散步 / 在沙滩上走）。
+    const leadingMarkers = ['沿着', '穿过', '在', '从', '向', '朝', '往'];
+    for (let i = 0; i < leadingMarkers.length; i += 1) {
+      const marker = leadingMarkers[i];
+      if (!source.startsWith(marker, predicateStart)) continue;
+      const markerEnd = predicateStart + marker.length;
+      const targetMatches = scanZhFrom(source, markerEnd);
+      const target = targetMatches.find(function (m) {
+        return m.start === markerEnd &&
+          TARGET_CATEGORIES.indexOf(m.entry.category) !== -1 &&
+          ['subject', 'outfit', 'accessory'].indexOf(m.entry.category) === -1;
+      });
+      if (!target) continue;
+      const suffix = locativeSuffixAt(source, target.end);
+      const actionStart = target.end + suffix.length;
+      const actionCand = actionStart < source.length ? actionStartingAt(source, actionStart) : null;
+      if (!actionCand && marker !== '穿过') continue;
+      const targetText = source.slice(markerEnd, target.end).trim();
+      if (!targetText) continue;
+      const leftover = source.slice(actionStart + (actionCand ? actionCand.alias.length : 0)).trim();
+      if (leftover && /[，,。.；;、]/.test(leftover)) continue;
+      const targetResult = translateZhPhrase(targetText, { slot: 'scene', allowRelation: false });
+      const actionAlias = actionCand ? actionCand.alias : marker;
+      const actionResult = actionCand
+        ? translateZhPhrase(actionAlias, { slot: 'pose', allowRelation: false })
+        : { en: 'walking', zh: '走', matches: [], unknown: [] };
+      const moodResult = leftover
+        ? translateZhPhrase(leftover, { slot: 'style', allowRelation: false })
+        : null;
+      if (leftover && !isStyleLikeResult(moodResult)) continue;
+      return locativeResult(source, subjectText, subjectResult, actionCand || { alias: marker },
+        actionResult, marker, targetText, targetResult, suffix, leftover, moodResult);
+    }
+
+    // 情况二：动作 + 关系词 + 地点（走在沙滩上 / 坐在椅子上 / 跑过街道）。
+    const inlineMarkers = ['沿着', '穿过', '在', '到', '过', '从', '向', '朝', '往'];
+    let marker = null;
+    let markerIndex = -1;
+    for (let i = predicateStart; i < source.length; i += 1) {
+      for (let t = 0; t < inlineMarkers.length; t += 1) {
+        const token = inlineMarkers[t];
+        if (!source.startsWith(token, i)) continue;
+        if (token === '在' && /[现正所]/.test(source.charAt(i - 1))) continue;
+        marker = token;
+        markerIndex = i;
+        break;
+      }
+      if (marker) break;
+    }
+    if (!marker || markerIndex <= predicateStart) return null;
+
+    const actionCand = actionEndingAt(source, predicateStart, markerIndex);
+    if (!actionCand) return null;
+
+    const targetStart = markerIndex + marker.length;
+    const targetMatches = scanZhFrom(source, targetStart);
+    const target = targetMatches.find(function (m) {
+      return m.start === targetStart &&
+        TARGET_CATEGORIES.indexOf(m.entry.category) !== -1 &&
+        ['subject', 'outfit', 'accessory'].indexOf(m.entry.category) === -1;
+    });
+    if (!target) return null;
+
+    const suffix = locativeSuffixAt(source, target.end);
+    const targetText = source.slice(targetStart, target.end).trim();
+    if (!targetText) return null;
+    const leftover = source.slice(target.end + suffix.length).trim();
+    // 目标后面如果还有第二个动作（老人坐在长椅上看报纸），交给原先的
+    // 「谁 + 地点 + 动作」关系解析，避免把「看报纸」吞掉。
+    if (leftover && actionStartingAt(source, target.end + suffix.length)) return null;
+    const targetResult = translateZhPhrase(targetText, { slot: 'scene', allowRelation: false });
+    const actionResult = translateZhPhrase(actionCand.alias, { slot: 'pose', allowRelation: false });
+    const moodResult = leftover
+      ? translateZhPhrase(leftover, { slot: 'style', allowRelation: false })
+      : null;
+    if (leftover && !isStyleLikeResult(moodResult)) return null;
+
+    return locativeResult(source, subjectText, subjectResult, actionCand, actionResult,
+      marker, targetText, targetResult, suffix, leftover, moodResult);
+  }
+
+  function decomposeRelation(text) {
+    // 动作/地点关系优先拆成「动作 + 方位短语」。若目标后还有第二个动作
+    //（老人坐在长椅上看报纸），locative 会放弃，再交给原来的关系解析。
+    return decomposeLocativeRelation(text) || decomposeSubjectRelation(text);
   }
 
   function translateZhPhrase(phrase, options) {
@@ -638,11 +1166,6 @@
       };
     }
 
-    // 只有「的 / 一个 / 她」这类虚词时不进入提示词。
-    if (!stripStopZh(text)) {
-      return { en: '', matches: [], unknown: [], passthrough: true };
-    }
-
     const key = text.toLowerCase().replace(/\s+/g, '');
     let exact = exactZh[key];
     if (exact) {
@@ -652,6 +1175,12 @@
         matches: [{ entry: exact, alias: text, start: 0, end: text.length }],
         unknown: []
       };
+    }
+
+    // 只有「的 / 一个 / 她」这类虚词时不进入提示词。规范词命中已在前面
+    // 返回，所以「被套 / 座套」这类含虚词字的真实物体不会被清空。
+    if (!stripStopZh(text)) {
+      return { en: '', matches: [], unknown: [], passthrough: true };
     }
 
     const opts = options || {};

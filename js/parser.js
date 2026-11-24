@@ -114,6 +114,12 @@
   const CUE_BY_TEXT = Object.create(null);
   CUES.forEach(function (cue) { CUE_BY_TEXT[cue.text] = cue; });
 
+  // 广告 / 海报是「媒介」，不是主题动作本身。「拒绝抽烟的广告」应先拆成
+  // 「拒绝抽烟」和「广告」，否则整句会被塞进同一个框。这里只拆「…的 +
+  // 媒介词」结构，并让更长的已知词优先（广告牌、广告模特不能被拆成广告）。
+  const MEDIA_HEADS = ['公益广告', '禁烟广告', '广告海报', '电影海报', '广告', '海报']
+    .sort(function (a, b) { return b.length - a.length; });
+
   const SUBJECT_WORDS = /(女人|男人|女孩|男孩|女子|男子|女生|男生|少女|少年|人物|老人|儿童|模特|女孩儿|女的|男的|她|他)/;
 
   // 判断某个提示词是否处在「穿米色风衣的女人」这种定语结构中。
@@ -158,6 +164,35 @@
       if (chunk) out.push(chunk);
     }
     return out;
+  }
+
+  function hasLongerKnownAliasAt(text, index, length) {
+    const candidates = L.zhIndex[String(text.charAt(index) || '').toLowerCase()];
+    if (!candidates) return false;
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (candidates[i].alias.length > length && text.startsWith(candidates[i].alias, index)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function splitByMedium(phrase) {
+    const text = U.normalizeSpace(phrase);
+    if (!text) return [];
+    for (let i = 1; i < text.length; i += 1) {
+      if (text.charAt(i - 1) !== '的') continue;
+      for (let h = 0; h < MEDIA_HEADS.length; h += 1) {
+        const head = MEDIA_HEADS[h];
+        if (!text.startsWith(head, i)) continue;
+        // 「广告牌 / 广告模特」这类更长的已知词不是媒介，保留整词。
+        if (hasLongerKnownAliasAt(text, i, head.length)) continue;
+        const left = text.slice(0, i - 1).trim();
+        const right = text.slice(i).trim();
+        if (left && right) return [left, right];
+      }
+    }
+    return [text];
   }
 
   function cueSlotOf(text) {
@@ -264,7 +299,11 @@
         return;
       }
       splitByCues(phrase).forEach(function (chunk) {
-        if (chunk.trim()) chunks.push(chunk.trim());
+        if (!chunk.trim()) return;
+        // 「拒绝抽烟的广告」→「拒绝抽烟」+「广告」；媒介单独进画风框。
+        splitByMedium(chunk).forEach(function (part) {
+          if (part.trim()) chunks.push(part.trim());
+        });
       });
     });
 

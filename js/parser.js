@@ -142,9 +142,20 @@
     return null;
   }
 
+  // 告示 / 标识是固定短语，不能因为里面含有「拍照 / 奔跑」等动作提示词
+  // 就被拆成「禁止」+「拍照」。整条短语在词库里是 sign 时优先保留。
+  function isWholeSignPhrase(text) {
+    const candidates = L.zhIndex[String(text.charAt(0) || '').toLowerCase()] || [];
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (candidates[i].alias === text && candidates[i].entry.category === 'sign') return true;
+    }
+    return false;
+  }
+
   function splitByCues(phrase) {
     const text = U.normalizeSpace(phrase);
     if (!text) return [];
+    if (isWholeSignPhrase(text)) return [text];
     const cuts = [0];
     let i = 0;
     while (i < text.length) {

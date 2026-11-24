@@ -59,6 +59,8 @@ test('词典规模落在覆盖率最佳点', function () {
   assert.ok(byCategory.outfit.length <= 2500, 'outfit 不应再靠笛卡尔积膨胀');
   assert.ok(byCategory.outfit.length < byCategory.scene.length);
   assert.ok(byCategory.pose.length >= 400);
+  assert.ok(byCategory.action.length >= 300, 'action 要覆盖日常行为与动宾短语');
+  assert.ok(byCategory.sign.length >= 150, 'sign 要系统覆盖禁止/请勿类公共标识');
   assert.ok(byCategory.subject.length >= 500);
   assert.ok(byCategory.object.length >= 2500, 'object 要系统覆盖家具/厨房/食物/家电/文具/交通/建筑/自然/动物用品');
   assert.ok(byCategory.object.length <= 4000, 'object 不应靠颜色笛卡尔积膨胀');
@@ -403,6 +405,101 @@ test('换词回归：换物体、动物、动作、氛围后关键零件仍然�
       assert.ok(re.test(assembled.positiveEn), text + ' 缺少关键零件 ' + re);
     });
     assert.ok(!/[\u3400-\u9fff]/.test(assembled.positiveEn), text + ' 已命中词不应残留中文');
+  });
+});
+
+test('公共标识固定短语整条命中，不被动作词拆丢', function () {
+  const cases = [
+    ['请勿随地大小便', 'no public urination or defecation', /no public urination or defecation/i],
+    ['禁止吸烟', 'smoking prohibited', /smoking prohibited/i],
+    ['禁止拍照', 'no photography', /no photography/i],
+    ['请勿拍照', 'please do not take photos', /do not take photos/i],
+    ['禁止奔跑', 'running prohibited', /running prohibited/i],
+    ['请勿奔跑', 'no running', /no running/i],
+    ['小心地滑', 'wet floor', /wet floor/i],
+    ['注意安全', 'stay safe', /stay safe/i],
+    ['前方施工', 'construction ahead', /construction ahead/i],
+    ['闲人免进', 'authorized personnel only', /authorized personnel only/i],
+    ['保持安静', 'keep quiet', /keep quiet/i],
+    ['禁止饮食', 'no food or drink', /no food or drink/i],
+    ['禁止游泳', 'no swimming', /no swimming/i],
+    ['禁止入内', 'no entry', /no entry/i],
+    ['请排队', 'please queue here', /please queue here/i],
+    ['紧急出口', 'emergency exit', /emergency exit/i]
+  ];
+
+  cases.forEach(function (item) {
+    const text = item[0];
+    const parsed = Parser.parse(text);
+    assert.deepStrictEqual(parsed.unknown, [], text + ' 不应有未命中词');
+    assert.strictEqual(parsed.chunks.length, 1, text + ' 应作为整条固定短语保留');
+    assert.strictEqual(parsed.chunks[0], text, text + ' 不应被动作提示词拆开');
+    assert.strictEqual(parsed.segments.length, 1, text + ' 应只有一个语义段');
+    assert.strictEqual(parsed.segments[0].slot, 'scene', text + ' 应归入场景/告示框');
+    assert.strictEqual(parsed.segments[0].en, item[1], text + ' 英文译法不稳定');
+
+    const translated = TR.translateZh(text);
+    assert.deepStrictEqual(translated.unknown, [], text + ' 直接翻译不应落空');
+    assert.strictEqual(translated.en, item[1], text + ' 直接翻译英文不稳定');
+    assert.strictEqual(translated.matches[0].entry.category, 'sign', text + ' 应命中告示标识类');
+    assert.strictEqual(translated.matches[0].entry.zh, text, text + ' 应命中整条规范词');
+
+    const assembled = Assemble.assemble(pipeline(text).slots);
+    assert.ok(item[2].test(assembled.positiveEn), text + ' 最终提示词缺少告示语义：' + assembled.positiveEn);
+  });
+});
+
+test('禁止吸烟与吸烟是两条语义，禁止吸烟不得退成单纯 smoking', function () {
+  const noSmoking = TR.translateZh('禁止吸烟');
+  const smoking = TR.translateZh('吸烟');
+
+  assert.deepStrictEqual(noSmoking.unknown, []);
+  assert.deepStrictEqual(smoking.unknown, []);
+  assert.strictEqual(noSmoking.en, 'smoking prohibited');
+  assert.strictEqual(smoking.en, 'smoking');
+  assert.notStrictEqual(noSmoking.en, smoking.en);
+  assert.ok(!/^smoking$/i.test(noSmoking.en), '禁止吸烟不能只译成 smoking');
+  assert.strictEqual(noSmoking.matches[0].entry.zh, '禁止吸烟');
+  assert.strictEqual(noSmoking.matches[0].entry.category, 'sign');
+  assert.strictEqual(smoking.matches[0].entry.category, 'pose');
+
+  const noSmokingParsed = Parser.parse('禁止吸烟');
+  assert.deepStrictEqual(noSmokingParsed.unknown, []);
+  assert.strictEqual(noSmokingParsed.segments[0].slot, 'scene');
+  assert.strictEqual(noSmokingParsed.segments[0].en, 'smoking prohibited');
+
+  const smokingParsed = Parser.parse('吸烟');
+  assert.deepStrictEqual(smokingParsed.unknown, []);
+  assert.strictEqual(smokingParsed.segments[0].slot, 'pose');
+  assert.strictEqual(smokingParsed.segments[0].en, 'smoking');
+
+  // 告示语义必须原意保留，不能被改写成委婉说法或单纯动作。
+  assert.ok(!/^smoking$/i.test(TR.translateZh('禁止吸烟').en));
+  assert.strictEqual(TR.translateZh('吸烟').en, 'smoking');
+});
+
+test('本轮新增规范词都保持唯一并能中英互译回自己', function () {
+  const broadened = T.Lexicon.broadenEntries;
+  assert.ok(broadened.length >= 1000, '本轮新增规范词应达到千条量级');
+
+  const zhSeen = Object.create(null);
+  const enSeen = Object.create(null);
+  broadened.forEach(function (entry) {
+    assert.ok(!zhSeen[entry.zh], '新增规范中文重复：' + entry.zh);
+    zhSeen[entry.zh] = true;
+    const enKey = entry.en.toLowerCase();
+    assert.ok(!enSeen[enKey], '新增规范英文重复：' + entry.en);
+    enSeen[enKey] = true;
+
+    const zhResult = TR.translateZh(entry.zh);
+    assert.deepStrictEqual(zhResult.unknown, [], '新增词不应落空：' + entry.zh);
+    assert.ok(zhResult.matches.length, '新增词应命中：' + entry.zh);
+    assert.strictEqual(zhResult.matches[0].entry.zh, entry.zh, '新增词被别名抢占：' + entry.zh);
+    assert.strictEqual(zhResult.en, entry.en, '新增词英文不稳定：' + entry.zh);
+
+    const enResult = TR.translateEn(entry.en);
+    assert.ok(enResult.matches.length, '新增英文应命中：' + entry.en);
+    assert.strictEqual(enResult.matches[0].entry.zh, entry.zh, '新增英文反译不稳定：' + entry.en);
   });
 });
 

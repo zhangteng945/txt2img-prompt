@@ -33,6 +33,26 @@
     return text.toLowerCase().indexOf(term.toLowerCase()) !== -1;
   }
 
+  // 关系句会把同一物体放进姿态（peeing on a car wheel）和场景（car wheel）。
+  // 已被前面的完整短语覆盖时不再重复输出；按单词边界判断，避免把 man
+  // 误判成 woman 的一部分。
+  function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function alreadyCovered(phrase, allText) {
+    if (!allText) return false;
+    const re = new RegExp('(^|[^a-z0-9])' + escapeRegExp(phrase.toLowerCase()) + '([^a-z0-9]|$)', 'i');
+    return re.test(allText.toLowerCase());
+  }
+
+  // 关系句的姿态短语自带目标（peeing on a car wheel）。它紧跟在人物后面时，
+  // 合成 a dog peeing on a car wheel，比 a dog, peeing on... 更自然。
+  function looksLikeRelationAction(phrase) {
+    return /^[a-z]+ing\b/i.test(phrase) &&
+      /\b(on|at|in|toward|towards|after|by|against|into|over|under|next to)\b/i.test(phrase);
+  }
+
   function selectQuality(styleText, allText, hasPerson) {
     const nonPhoto = NON_PHOTO_RE.test(styleText);
     const candidates = nonPhoto
@@ -49,6 +69,7 @@
     const zhSections = [];
     const seen = Object.create(null);
     let allText = '';
+    let lastPhraseSlot = '';
 
     SF.definitions.forEach(function (def) {
       const slot = slots[def.key] || { en: '', zh: '' };
@@ -56,10 +77,20 @@
       let changed = false;
       enList.forEach(function (phrase) {
         const k = phrase.toLowerCase();
-        if (seen[k]) return;
+        if (seen[k] || alreadyCovered(phrase, allText)) return;
         seen[k] = true;
+
+        if (def.key === 'pose' && lastPhraseSlot === 'person' && looksLikeRelationAction(phrase)) {
+          phrases[phrases.length - 1] += ' ' + phrase;
+          allText = phrases.join(', ');
+          lastPhraseSlot = 'pose';
+          changed = true;
+          return;
+        }
+
         phrases.push(phrase);
         allText += (allText ? ', ' : '') + phrase;
+        lastPhraseSlot = def.key;
         changed = true;
       });
 

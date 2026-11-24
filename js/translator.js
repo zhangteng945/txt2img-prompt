@@ -1,9 +1,11 @@
 /*
  * translator.js — 词典驱动的中英互译
  *
- * 策略：先整条短语精确匹配，再识别「穿着 / 站在 / 坐在 / 背景是 / 光线是」
- * 等结构，最后做最长词匹配 + 组合翻译。词典没收录的内容原样保留，
- * 同时通过 unknown 数组交给界面提示，绝不静默删除。
+ * 策略：先识别「谁 + 对什么 + 做什么 + 什么氛围」的关系句式，再用词典
+ * 零件组装 peeing on a car wheel 这类自然英文；然后做整条短语精确匹配、
+ * 「穿着 / 站在 / 坐在 / 背景是 / 光线是」等结构，最后做最长词匹配 +
+ * 组合翻译。词典没收录的内容原样保留，同时通过 unknown 数组交给界面
+ * 提示，绝不静默删除。
  */
 (function () {
   'use strict';
@@ -26,7 +28,8 @@
     '此', '那', '这', '我', '你', '他', '她', '它', '他们', '她们', '人们',
     '着', '的', '个', '位', '件', '条', '双', '只', '把', '张', '座', '片',
     '群', '套', '头', '身', '款', '种', '些', '很', '手里', '手中',
-    '一杯', '两杯', '三杯', '几杯', '一口', '一杯杯'
+    '一杯', '两杯', '三杯', '几杯', '一口', '一杯杯',
+    '画面', '场面', '场景中'
   ].sort(function (a, b) { return b.length - a.length; });
 
   const EN_STOP = [
@@ -45,7 +48,9 @@
   [
     'young', 'middle-aged', 'elderly', 'cute', 'mature', 'elegant', 'poised',
     'slim', 'tall', 'petite', 'well-proportioned', 'athletic', 'muscular',
-    'curvy', 'fair-skinned', 'tan-skinned', 'dark-skinned'
+    'curvy', 'fair-skinned', 'tan-skinned', 'dark-skinned',
+    'pretty', 'beautiful', 'good-looking', 'handsome', 'attractive',
+    'stunning', 'gorgeous', 'lovely', 'charming'
   ].forEach(function (w) { PRE_PERSON_EN[w] = true; });
 
   const PLACE_AT = /(station|airport|doorway|bus stop|platform|entrance|corner)/i;
@@ -63,6 +68,14 @@
     kneeling: '跪在',
     crouching: '蹲在'
   };
+
+  // 关系句式的零件类别。动作不只来自 pose，也包括「对着镜头微笑」这类表情。
+  const ACTION_CATEGORIES = ['pose', 'expression', 'action'];
+  const TARGET_CATEGORIES = ['object', 'scene', 'camera', 'light', 'outfit', 'accessory', 'subject'];
+  const RELATION_MARKERS = ['对着', '朝着', '向着', '冲着', '冲向', '给', '往', '向', '朝', '在', '对'];
+  const EXCRETION_RE = /^(peeing|urinating|pooping|defecating|spraying|marking)\b/i;
+  const MOVEMENT_RE = /^(running|walking|jumping|charging|flying|swimming|driving|riding|climbing|chasing)\b/i;
+  const GAZE_RE = /^(looking|gazing|staring|smiling|grinning|laughing|barking|growling|pointing|waving|glancing)\b/i;
 
   const exactZh = Object.create(null);
   const exactEn = Object.create(null);
@@ -364,7 +377,7 @@
 
   function styleComposition(matches) {
     const relevant = matches.filter(function (m) {
-      return m.entry.category === 'style' || m.entry.category === 'quality';
+      return m.entry.category === 'style' || m.entry.category === 'quality' || m.entry.category === 'mood';
     });
     if (!relevant.length) return null;
     return relevant.map(function (m) { return m.entry.en; }).join(', ');
@@ -383,6 +396,232 @@
     const tail = phrase.slice(cursor);
     if (meaningfulGap(tail)) parts.push(tail.trim());
     return joinWords(parts);
+  }
+
+  // ── 关系句式：谁 + 对什么 + 做什么 + 什么氛围 ──────────────────
+  // 先定位主体、关系词、目标物体、动作和尾部的氛围，再把零件按英文关系
+  // 组装成 peeing on a car wheel / smiling at the camera。词典只提供零件，
+  // 不为某一句具体笑话写整句模板。
+
+  function findRelationMarker(text, from) {
+    for (let i = from; i < text.length; i += 1) {
+      for (let t = 0; t < RELATION_MARKERS.length; t += 1) {
+        const token = RELATION_MARKERS[t];
+        if (!text.startsWith(token, i)) continue;
+        // 「现在 / 正在 / 所在」里的「在」不是关系词。
+        if (token === '在' && /[现正所]/.test(text.charAt(i - 1))) continue;
+        return { token: token, index: i, end: i + token.length };
+      }
+    }
+    return null;
+  }
+
+  function splitRelationSuffix(raw) {
+    const text = String(raw || '').trim();
+    const m = text.match(/(上面|旁边|上|里|中|旁|边|前|后|下)$/);
+    if (!m) return { text: text, suffix: '' };
+    return { text: text.slice(0, text.length - m[1].length).trim(), suffix: m[1] };
+  }
+
+  function relationPrep(marker, actionEn, suffix) {
+    const action = String(actionEn || '');
+    if (suffix === '里' || suffix === '中') return 'in';
+    if (suffix === '旁边' || suffix === '旁' || suffix === '边') return 'next to';
+    if (suffix === '前') return 'in front of';
+    if (suffix === '后') return 'behind';
+    if (suffix === '下') return 'under';
+    if (suffix === '上面' || suffix === '上') return 'on';
+    if (EXCRETION_RE.test(action)) return 'on';
+    if (marker.token === '在' || marker.token === '给' || marker.token === '往') return 'on';
+    if (GAZE_RE.test(action)) return 'at';
+    if (MOVEMENT_RE.test(action)) return /chasing/i.test(action) ? 'after' : 'toward';
+    return 'toward';
+  }
+
+  function withIndefiniteArticle(text) {
+    const t = String(text || '').trim();
+    if (!t || U.hasCjk(t)) return t;
+    if (/^(a|an|the|this|that|these|those|his|her|their|its|my|your|our|some|many|several|two|three|four|five)\b/i.test(t)) return t;
+    if (/^(he|she|it|they|we|i|you)\b/i.test(t)) return t;
+    if (/^(people|children|men|women|feet|teeth|mice|geese)$/i.test(t)) return t;
+    if (/(?:s|es)$/i.test(t) && !/(glass|grass|dress|bus|class|lens|series|species)$/i.test(t)) return t;
+    return (/^[aeiou]/i.test(t) ? 'an ' : 'a ') + t;
+  }
+
+  function uniqueList(list) {
+    const out = [];
+    (list || []).forEach(function (item) {
+      if (item && !out.includes(item)) out.push(item);
+    });
+    return out;
+  }
+
+  function decomposeRelation(text) {
+    const source = U.normalizeSpace(text);
+    if (!source || !U.hasCjk(source)) return null;
+
+    const matches = scanZh(source);
+    const subjectMatch = matches.find(function (m) { return m.entry.category === 'subject'; });
+    if (!subjectMatch) return null;
+
+    const marker = findRelationMarker(source, subjectMatch.end);
+    if (!marker || marker.index <= 0) return null;
+
+    const subjectText = source.slice(0, marker.index).trim();
+    if (!subjectText) return null;
+
+    // 先找关系词后面的目标物体，再把动作限定在目标之后，避免把「跑车」
+    // 里的「跑」误当动作。
+    const targetCandidates = matches.filter(function (m) {
+      return m.start >= marker.end && TARGET_CATEGORIES.indexOf(m.entry.category) !== -1;
+    });
+    let targetMatch = null;
+    let actionMatch = null;
+    for (let i = 0; i < targetCandidates.length; i += 1) {
+      const target = targetCandidates[i];
+      const action = matches.find(function (m) {
+        return m.start >= target.end && ACTION_CATEGORIES.indexOf(m.entry.category) !== -1;
+      });
+      if (action) {
+        targetMatch = target;
+        actionMatch = action;
+        break;
+      }
+    }
+    if (!actionMatch) {
+      actionMatch = matches.find(function (m) {
+        return m.start >= marker.end && ACTION_CATEGORIES.indexOf(m.entry.category) !== -1;
+      });
+    }
+    if (!actionMatch) return null;
+
+    const objectRaw = source.slice(marker.end, actionMatch.start)
+      .replace(/^[，,、\s]+|[，,、\s]+$/g, '');
+    const objectParts = splitRelationSuffix(objectRaw);
+    const objectText = objectParts.text;
+    if (!objectText) return null;
+
+    // 目标词后面的「的搞笑画面」是氛围，不是动作的一部分。
+    let moodText = source.slice(actionMatch.end).trim()
+      .replace(/^[的地得，,、\s]+/, '');
+    let moodResult = null;
+    if (moodText && stripStopZh(moodText)) {
+      moodResult = translateZhPhrase(moodText, { slot: 'style', allowRelation: false });
+      if (!moodResult.en) moodResult = null;
+    }
+
+    const subjectResult = translateZhPhrase(subjectText, { slot: 'person', allowRelation: false });
+    const actionResult = translateZhPhrase(actionMatch.alias, { slot: 'pose', allowRelation: false });
+    const objectResult = translateZhPhrase(objectText, { slot: 'scene', allowRelation: false });
+
+    const subjectEn = withIndefiniteArticle(subjectResult.en || subjectText);
+    let objectEn = objectResult.en || objectText;
+    // 「对着镜头」在英文里说 at the camera，而不是 at a lens。
+    if (targetMatch && targetMatch.entry.category === 'camera' && /^(lens|camera lens)$/i.test(objectEn)) {
+      objectEn = 'camera';
+    }
+    const actionEn = actionResult.en || actionMatch.alias;
+    const actionZh = actionResult.zh || actionMatch.alias;
+    const objectZh = objectResult.zh || objectText;
+
+    // 「给 / 往 / 在」必须带上「上 / 里 / 旁…」这类方位补语，或者目标
+    // 明确是物体/场景且动作是排泄，才按关系句处理。这样「给朋友打电话」
+    // 「在咖啡馆喝咖啡」仍走普通短语翻译，不会被拼成 on a friend / on a cafe。
+    const needsLocative = marker.token === '给' || marker.token === '往' || marker.token === '在';
+    if (needsLocative && !objectParts.suffix) {
+      const targetCategory = targetMatch ? targetMatch.entry.category : '';
+      const excretionTarget = EXCRETION_RE.test(actionEn) &&
+        (targetCategory === 'object' || targetCategory === 'scene');
+      if (!excretionTarget) return null;
+    }
+
+    let prep = relationPrep(marker, actionEn, objectParts.suffix);
+    if (!objectParts.suffix && marker.token === '在' && targetMatch && targetMatch.entry.category === 'scene') {
+      prep = 'in';
+    }
+    // 动作词本身已带介词（peeing on）时不再重复。
+    if (/\b(on|at|in|toward|towards|after|by|against|into|over|under)\s*$/i.test(actionEn)) prep = '';
+    const targetPhraseEn = /^camera$/i.test(objectEn) ? 'the camera' : withIndefiniteArticle(objectEn);
+    const relationEn = prep
+      ? joinWords([actionEn, prep, targetPhraseEn])
+      : joinWords([actionEn, targetPhraseEn]);
+
+    let relationZh;
+    if (marker.token === '给' || marker.token === '往' || marker.token === '在') {
+      relationZh = '在' + objectZh + (objectParts.suffix || '上');
+    } else {
+      relationZh = marker.token + objectZh;
+    }
+    const actionZhFull = relationZh + actionZh;
+
+    const moodZh = moodResult ? (moodResult.zh || moodText) : '';
+    const moodEn = moodResult ? moodResult.en : '';
+    const subjectZh = subjectResult.zh || subjectText;
+
+    const segments = [
+      {
+        text: subjectText,
+        zh: subjectZh,
+        en: subjectEn,
+        slot: 'person',
+        matches: subjectResult.matches || [],
+        unknown: subjectResult.unknown || []
+      },
+      {
+        text: relationZh + actionZh,
+        zh: actionZhFull,
+        en: relationEn,
+        slot: 'pose',
+        matches: actionResult.matches || [],
+        unknown: actionResult.unknown || []
+      },
+      {
+        text: objectText,
+        zh: objectZh,
+        en: objectEn,
+        slot: 'scene',
+        matches: objectResult.matches || [],
+        unknown: objectResult.unknown || []
+      }
+    ];
+    if (moodResult) {
+      segments.push({
+        text: moodText,
+        zh: moodZh,
+        en: moodEn,
+        slot: 'style',
+        matches: moodResult.matches || [],
+        unknown: moodResult.unknown || []
+      });
+    }
+
+    const allMatches = uniqueList(subjectResult.matches || []);
+    (actionResult.matches || []).forEach(function (m) {
+      if (allMatches.indexOf(m) === -1) allMatches.push(m);
+    });
+    (objectResult.matches || []).forEach(function (m) {
+      if (allMatches.indexOf(m) === -1) allMatches.push(m);
+    });
+    if (moodResult) {
+      (moodResult.matches || []).forEach(function (m) {
+        if (allMatches.indexOf(m) === -1) allMatches.push(m);
+      });
+    }
+    const unknown = uniqueList(
+      (subjectResult.unknown || [])
+        .concat(actionResult.unknown || [])
+        .concat(objectResult.unknown || [])
+        .concat(moodResult ? moodResult.unknown || [] : [])
+    );
+
+    return {
+      relation: marker.token,
+      en: U.joinPhrasesEn([subjectEn, relationEn, moodEn].filter(Boolean)),
+      zh: U.joinPhrasesZh([subjectZh, actionZhFull, moodZh].filter(Boolean)),
+      matches: allMatches,
+      unknown: unknown,
+      segments: segments
+    };
   }
 
   function translateZhPhrase(phrase, options) {
@@ -415,9 +654,25 @@
       };
     }
 
+    const opts = options || {};
+
+    // 关系句式先拆角色再组装；递归翻译各角色时关闭关系解析，避免套娃。
+    if (opts.allowRelation !== false) {
+      const relation = decomposeRelation(text);
+      if (relation) {
+        return {
+          en: relation.en,
+          zh: relation.zh,
+          matches: relation.matches,
+          unknown: relation.unknown,
+          relation: relation.relation,
+          segments: relation.segments
+        };
+      }
+    }
+
     const matches = scanZh(text);
     const unknown = unknownZhSpans(text, matches);
-    const opts = options || {};
 
     // 「拿着 / 撑着 / 端着…」这类动作短语。
     let m = text.match(/^(拿着|端着|举着|托着|扶着|抱着|握着|撑着)(.+)$/);
@@ -881,6 +1136,7 @@
     translateEn: translateEn,
     translateZhPhrase: translateZhPhrase,
     translateEnPhrase: translateEnPhrase,
+    decomposeRelation: decomposeRelation,
     hasCjk: U.hasCjk,
     stopZh: STOP_ZH,
     stopEn: EN_STOP

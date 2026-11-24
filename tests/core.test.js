@@ -80,6 +80,73 @@ test('英文反向翻译自然且可对照', function () {
   assert.strictEqual(TR.translateEn('street at dusk').zh, '黄昏的街边');
 });
 
+test('高频中文外貌说法必须命中正确规范词并译出英文', function () {
+  const cases = [
+    ['美女', 'beautiful woman', 'subject', '美丽的女性'],
+    ['漂亮', 'pretty', 'appearance', '漂亮'],
+    ['美丽', 'beautiful', 'appearance', '美丽'],
+    ['好看', 'good-looking', 'appearance', '好看'],
+    ['帅哥', 'handsome man', 'subject', '英俊男性'],
+    ['美男', 'handsome man', 'subject', '英俊男性'],
+    ['美少女', 'beautiful girl', 'subject', '美少女'],
+    ['佳人', 'beautiful woman', 'subject', '美丽的女性'],
+    ['女神', 'goddess-like beauty', 'subject', '女神'],
+    ['男神', 'handsome man', 'subject', '英俊男性'],
+    ['靓女', 'beautiful woman', 'subject', '美丽的女性'],
+    ['靓仔', 'handsome man', 'subject', '英俊男性'],
+    ['美眉', 'beautiful girl', 'subject', '美少女'],
+    ['校花', 'campus beauty', 'subject', '校花'],
+    ['校草', 'campus heartthrob', 'subject', '校草'],
+    ['漂亮的女人', 'beautiful woman', 'subject', '美丽的女性'],
+    ['美丽的女孩', 'beautiful girl', 'subject', '美少女'],
+    ['混血美女', 'mixed-race woman', 'subject', '混血女性']
+  ];
+
+  cases.forEach(function (item) {
+    const term = item[0];
+    const result = TR.translateZh(term, { slot: 'person' });
+    assert.deepStrictEqual(result.unknown, [], term + ' 不应落空');
+    assert.strictEqual(result.en, item[1], term + ' 英文译法不稳定');
+    assert.ok(result.matches.length, term + ' 应命中词库');
+    assert.strictEqual(result.matches[0].entry.category, item[2], term + ' 类别不对');
+    assert.strictEqual(result.matches[0].entry.zh, item[3], term + ' 规范词不对');
+
+    const parsed = Parser.parse(term);
+    assert.strictEqual(parsed.segments[0].slot, 'person', term + ' 应归入人物框');
+    assert.strictEqual(parsed.segments[0].en, item[1], term + ' 解析结果应稳定');
+  });
+
+  // 「美女」必须挂在宽词「美丽的女性」上，而不是窄词「混血女性」。
+  assert.notStrictEqual(TR.translateZh('美女').matches[0].entry.zh, '混血女性');
+  assert.strictEqual(TR.translateZh('混血美女').matches[0].entry.zh, '混血女性');
+});
+
+test('高频英文外貌词及人物组合必须命中正确类别', function () {
+  const cases = [
+    ['handsome', '英俊', 'appearance'],
+    ['pretty', '漂亮', 'appearance'],
+    ['beautiful', '美丽', 'appearance'],
+    ['gorgeous', '华丽', 'appearance'],
+    ['attractive', '迷人', 'appearance'],
+    ['stunning', '惊艳', 'appearance'],
+    ['handsome man', '英俊男性', 'subject'],
+    ['beautiful woman', '美丽的女性', 'subject'],
+    ['beautiful girl', '美少女', 'subject'],
+    ['handsome boy', '英俊男孩', 'subject']
+  ];
+
+  cases.forEach(function (item) {
+    const term = item[0];
+    const result = TR.translateEn(term);
+    assert.strictEqual(result.zh, item[1], term + ' 反向译法不稳定');
+    assert.ok(result.matches.length, term + ' 应命中词库');
+    assert.strictEqual(result.matches[0].entry.category, item[2], term + ' 类别不对');
+
+    const parsed = Parser.parse(term);
+    assert.strictEqual(parsed.segments[0].slot, 'person', term + ' 应归入人物框');
+  });
+});
+
 test('示例想法拆进六个框', function () {
   const text = '傍晚街边，短发女人穿米色风衣站着，侧脸看向远处，柔和自然光，电影感';
   const parsed = Parser.parse(text);
@@ -92,6 +159,48 @@ test('示例想法拆进六个框', function () {
   assert.ok(bySlot.scene.join(' ').includes('street at dusk'));
   assert.ok(bySlot.light.join(' ').includes('soft natural light'));
   assert.ok(bySlot.style.join(' ').includes('cinematic'));
+});
+
+test('关系句式先拆角色再组装：给…上 / 对着 / 在…上', function () {
+  const cases = [
+    '小狗给车轮上撒尿的搞笑画面',
+    '小狗对着车轮撒尿的搞笑画面',
+    '小狗在车轮上撒尿的搞笑画面'
+  ];
+
+  cases.forEach(function (text) {
+    const result = pipeline(text);
+    const parsed = result.parsed;
+    const slots = result.slots;
+
+    assert.deepStrictEqual(parsed.unknown, [], text + ' 不应有未命中词');
+    ['狗', '撒尿', '车轮', '搞笑', '画面'].forEach(function (term) {
+      assert.ok(!parsed.unknown.includes(term), text + ' 未命中列表不应出现 ' + term);
+    });
+
+    assert.strictEqual(SF.slots.length, 6, '六个框必须都存在');
+    assert.ok(/dog|puppy/i.test(slots.person.en), text + ' 人物框应体现狗');
+    assert.ok(/peeing|urinating/i.test(slots.pose.en), text + ' 姿态框应体现撒尿');
+    assert.ok(/wheel|tire/i.test(slots.pose.en + ' ' + slots.scene.en), text + ' 场景应体现车轮');
+    assert.ok(/funny|comedic/i.test(slots.style.en), text + ' 画风框应体现搞笑');
+
+    const assembled = Assemble.assemble(slots);
+    assert.ok(assembled.positiveEn.trim().length > 0, text + ' 最终提示词不能为空');
+    assert.ok(/dog|puppy/i.test(assembled.positiveEn), text + ' 最终提示词缺少狗');
+    assert.ok(/peeing|urinating/i.test(assembled.positiveEn), text + ' 最终提示词缺少撒尿');
+    assert.ok(/wheel|tire/i.test(assembled.positiveEn), text + ' 最终提示词缺少车轮');
+    assert.ok(/funny|comedic/i.test(assembled.positiveEn), text + ' 最终提示词缺少搞笑');
+    assert.ok(/peeing on a (car wheel|tire)/i.test(assembled.positiveEn), text + ' 应组装出 on 关系');
+    assert.ok(/a (dog|puppy) peeing on a (car wheel|tire)/i.test(assembled.positiveEn), text + ' 主体和关系动作应连成自然英文');
+    assert.ok(!/[\u3400-\u9fff]/.test(assembled.positiveEn), text + ' 已命中词不应残留中文');
+  });
+
+  // 未收录的目标物保留原文，不能把整段关系丢掉。
+  const fallback = pipeline('小狗给飞碟上撒尿的搞笑画面');
+  assert.ok(fallback.parsed.unknown.includes('飞碟'));
+  assert.ok(fallback.slots.pose.en.includes('飞碟'));
+  assert.ok(fallback.parsed.unknown.indexOf('撒尿') === -1);
+  assert.ok(fallback.parsed.unknown.indexOf('车轮') === -1);
 });
 
 test('补全只在缺失维度发生并留下记录', function () {

@@ -25,6 +25,8 @@
     color: 'outfit', // 颜色需结合上下文，slot-fill 会单独判断
     pose: 'pose',
     scene: 'scene',
+    object: 'scene',
+    mood: 'style',
     time: 'scene',
     weather: 'scene',
     light: 'light',
@@ -50,6 +52,8 @@
     color: '颜色',
     pose: '姿态动作',
     scene: '场景地点',
+    object: '物体道具',
+    mood: '氛围情绪',
     time: '时间',
     weather: '天气',
     light: '光线',
@@ -449,7 +453,7 @@
       ['走在路上', 'walking down the street', ['走在街上', '街上行走'], ['walking on the street']],
       ['行走', 'walking', ['走路', '漫步', '步行'], ['strolling', 'walk']],
       ['奔跑', 'running', ['跑', '跑步'], ['run', 'sprinting']],
-      ['跳跃', 'jumping', ['跳起', '腾空'], ['jump', 'leaping']],
+      ['跳跃', 'jumping', ['跳起', '腾空', '跳', '弹跳'], ['jump', 'leaping']],
       ['蹲着', 'crouching', ['蹲下', '蹲姿'], ['crouch', 'squatting']],
       ['跪着', 'kneeling', ['跪姿', '跪下'], ['kneel']],
       ['跳舞', 'dancing', ['舞蹈', '起舞'], ['dance', 'dancing pose']],
@@ -929,7 +933,16 @@
       ['丧尸', 'zombie', ['僵尸'], ['zombies']],
       ['外星人', 'alien', ['外星生物'], ['aliens']],
       ['虚拟偶像', 'virtual idol', ['虚拟歌手'], ['virtual idols']],
-      ['人工智能', 'artificial intelligence', ['AI人物'], ['AI character']]
+      ['人工智能', 'artificial intelligence', ['AI人物'], ['AI character']],
+      // 高频外貌称谓：用户日常写「美女 / 帅哥」时，优先落到宽而准的规范词，
+      // 不再只藏在「混血美女」这类窄别名里。美少女单独成条，避免和成年女性混用。
+      ['美丽的女性', 'beautiful woman', ['美女', '漂亮的女人', '美丽的女人', '漂亮女性', '美丽女性', '美人', '佳人', '绝代佳人', '古典佳人', '靓女'], ['beautiful women', 'pretty woman', 'attractive woman', 'stunning woman', 'gorgeous woman', 'classic beauty']],
+      ['英俊男性', 'handsome man', ['帅哥', '美男', '英俊男人', '帅男', '美男子', '英俊男子', '俊美男子', '男神', '靓仔', '俊男'], ['handsome men', 'good-looking man', 'good-looking guy', 'handsome guy']],
+      ['美少女', 'beautiful girl', ['美丽女孩', '美丽的女孩', '漂亮女孩', '漂亮的女孩', '美丽少女', '漂亮少女', '美眉', '小美女'], ['beautiful girls', 'pretty girl', 'lovely girl', 'beautiful young girl']],
+      ['英俊男孩', 'handsome boy', ['帅男孩', '俊俏男孩', '小帅哥', '英俊少年', '帅气男孩'], ['handsome boys', 'good-looking boy']],
+      ['校花', 'campus beauty', ['校园美女', '学校校花'], ['school beauty', 'campus queen']],
+      ['校草', 'campus heartthrob', ['校园帅哥', '学校校草'], ['school heartthrob', 'campus idol']],
+      ['女神', 'goddess-like beauty', ['女神范', '女神级美女', '气质女神'], ['goddess']]
     ],
 
     appearance: [
@@ -967,7 +980,16 @@
       ['矮个子', 'short person', ['个子矮'], ['short figure']],
       ['偏瘦', 'very slim', ['很瘦', '瘦削'], ['skinny', 'slender']],
       ['健壮', 'burly', ['壮实', '体格健壮'], ['strong build']],
-      ['中性风', 'androgynous', ['中性气质', '中性风格'], ['androgyny']]
+      ['中性风', 'androgynous', ['中性气质', '中性风格'], ['androgyny']],
+      // 高频外貌形容词：既可单独成框，也能和人物名词组合成
+      // beautiful woman / handsome man / pretty girl 等自然英文。
+      ['漂亮', 'pretty', ['好看的', '漂漂亮亮'], ['lovely', 'good-looking']],
+      ['美丽', 'beautiful', ['美丽的', '绝美', '美艳'], ['lovely', 'fair']],
+      ['好看', 'good-looking', ['耐看', '养眼'], ['nice-looking', 'easy on the eyes']],
+      ['英俊', 'handsome', ['帅气', '俊朗', '俊美', '英挺'], ['dashing']],
+      ['迷人', 'attractive', ['有魅力', '吸引人', '魅力十足'], ['charming', 'alluring']],
+      ['惊艳', 'stunning', ['令人惊艳', '惊艳全场', '美得惊人'], ['breathtaking', 'stunningly beautiful']],
+      ['华丽', 'gorgeous', ['华美', '艳丽', '绚丽'], ['glamorous', 'resplendent']]
     ],
 
     hair: [
@@ -1245,7 +1267,7 @@
 
     pose: [
       ['侧躺', 'lying on side', ['侧卧', '侧躺着'], ['lying sideways']],
-      ['趴着', 'lying on stomach', ['趴卧'], ['lying prone']],
+      ['趴着', 'lying on stomach', ['趴卧', '趴下', '趴在地上', '趴', '趴伏'], ['lying prone']],
       ['仰躺', 'lying on back', ['仰卧'], ['lying supine']],
       ['盘腿坐', 'sitting cross-legged', ['盘腿坐姿'], ['cross-legged sitting']],
       ['跷二郎腿', 'crossing legs', ['跷腿'], ['legs crossed']],
@@ -1298,7 +1320,19 @@
       ['旋转', 'spinning', ['旋转动作'], ['twirling']],
       ['坐在台阶上', 'sitting on steps', ['坐在阶梯上'], ['seated on stairs']],
       ['躺在沙发上', 'lying on sofa', ['躺在沙发'], ['lying on a couch']],
-      ['趴在地上', 'lying on the ground', ['趴地'], ['prone on the ground']]
+      ['趴在地上', 'lying on the ground', ['趴地'], ['prone on the ground']],
+      ['嗅闻', 'sniffing', ['闻', '嗅', '闻一闻', '嗅一嗅', '闻味道'], ['sniff', 'smelling', 'sniffing around']],
+      ['舔舐', 'licking', ['舔', '舔一舔', '舔东西'], ['lick', 'licking something']],
+      ['摇尾巴', 'wagging tail', ['摇尾', '摇着尾巴', '尾巴摇摆'], ['wagging its tail', 'tail wagging']],
+      ['追逐', 'chasing', ['追', '追赶', '追着', '追逐奔跑'], ['chase', 'chasing after', 'pursuing']],
+      ['打滚', 'rolling around', ['翻滚', '地上打滚'], ['rolling on the ground', 'rollicking']],
+      ['吠叫', 'barking', ['叫', '汪汪叫', '吠', '狗叫'], ['bark', 'barking loudly']],
+      ['低吼', 'growling', ['吼叫', '龇牙低吼'], ['growl', 'snarling']],
+      ['叼着东西', 'carrying something in its mouth', ['叼着', '嘴里叼着'], ['holding something in mouth']],
+      ['扑向', 'pouncing on', ['扑', '猛扑'], ['pounce', 'leaping at']],
+      ['蹭来蹭去', 'rubbing against', ['蹭', '蹭蹭'], ['nuzzling', 'rubbing up against']],
+      ['挠', 'scratching', ['抓挠', '挠痒'], ['scratch', 'scratching']],
+      ['撒尿', 'peeing', ['尿尿', '小便', '排尿', '嘘嘘', '撒尿', '尿一泡', '抬腿撒尿', '抬腿尿尿'], ['pee', 'peeing on', 'urinate', 'urinating', 'urinating on']]
     ],
 
     scene: [
@@ -1651,6 +1685,56 @@
       ['登山鞋', 'hiking boots', ['徒步鞋'], ['hiking shoes']],
       ['舞鞋', 'dance shoes', ['舞蹈鞋'], ['dancing shoes']],
       ['玛丽珍鞋', 'Mary Janes', ['玛丽珍'], ['mary jane shoes']]
+    ],
+
+    // 常见物体与车辆局部：让「谁对什么做什么」有可组合的目标零件，
+    // 不再要求用户为某个具体场景写一整句现成词条。
+    object: [
+      ['车轮', 'car wheel', ['车轮子', '汽车车轮', '车轱辘', '车轱辘轮', '轮子'], ['car wheels', 'wheel']],
+      ['轮胎', 'tire', ['车胎', '汽车轮胎', '轮胎外胎', '汽车车胎'], ['tyre', 'tires']],
+      ['汽车', 'car', ['车子', '小汽车', '轿车', '家用车', '私家车'], ['cars', 'automobile', 'sedan']],
+      ['跑车', 'sports car', ['超级跑车', '性能车'], ['sports cars', 'race car']],
+      ['路边的车', 'parked car', ['路边汽车', '停在路边的车', '停着的车', '路边停的车'], ['parked cars', 'car parked by the road']],
+      ['车门', 'car door', ['汽车车门', '车门把手'], ['car doors']],
+      ['车窗', 'car window', ['汽车车窗', '车窗玻璃'], ['car windows']],
+      ['保险杠', 'car bumper', ['汽车保险杠', '前保险杠', '后保险杠'], ['car bumpers', 'bumper']],
+      ['后备箱', 'car trunk', ['汽车后备箱', '车尾箱'], ['car trunks', 'boot of a car']],
+      ['引擎盖', 'car hood', ['汽车引擎盖', '发动机盖'], ['car hoods', 'bonnet']],
+      ['车牌', 'license plate', ['汽车牌照', '车牌号'], ['license plates', 'number plate']],
+      ['后视镜', 'side mirror', ['汽车后视镜', '车外后视镜'], ['side mirrors', 'wing mirror']],
+      ['车头灯', 'car headlight', ['汽车大灯', '前车灯', '车灯'], ['car headlights', 'headlight']],
+      ['排气管', 'exhaust pipe', ['汽车排气管', '尾气管'], ['exhaust pipes', 'tailpipe']],
+      ['方向盘', 'steering wheel', ['汽车方向盘', '驾驶盘'], ['steering wheels']],
+      ['车座', 'car seat', ['汽车座椅', '座位'], ['car seats', 'seat of a car']],
+      ['车顶', 'car roof', ['汽车车顶', '车顶棚'], ['car roofs', 'roof of a car']],
+      ['自行车', 'bicycle', ['单车', '脚踏车'], ['bicycles', 'bike']],
+      ['自行车轮', 'bicycle wheel', ['单车车轮', '自行车轮子'], ['bicycle wheels', 'bike wheel']],
+      ['摩托车', 'motorcycle', ['机车', '摩托'], ['motorcycles', 'motorbike']],
+      ['摩托车轮', 'motorcycle wheel', ['机车车轮', '摩托车轮子'], ['motorcycle wheels', 'motorbike wheel']],
+      ['卡车', 'truck', ['货车', '大卡车'], ['trucks', 'lorry']],
+      ['公交车', 'bus', ['巴士', '公共汽车'], ['buses', 'city bus']],
+      ['电线杆', 'utility pole', ['路灯杆', '电线柱子'], ['utility poles', 'lamp post']],
+      ['消防栓', 'fire hydrant', ['消防龙头', '消火栓'], ['fire hydrants', 'hydrant']],
+      ['垃圾桶', 'trash can', ['垃圾箱', '垃圾桶旁'], ['trash cans', 'garbage bin']],
+      ['木桩', 'wooden post', ['树桩', '木柱子'], ['wooden posts', 'tree stump']],
+      ['树', 'tree', ['大树', '树干', '树木'], ['trees', 'tree trunk']],
+      ['墙角', 'wall corner', ['墙边', '墙角处'], ['wall corners', 'corner of a wall']],
+      ['沙发', 'sofa', ['长沙发', '沙发椅'], ['sofas', 'couch']],
+      ['椅子', 'chair', ['座椅', '凳子'], ['chairs', 'stool']],
+      ['桌子', 'table', ['桌子旁', '桌面'], ['tables', 'desk']],
+      ['床', 'bed', ['床铺', '床边'], ['beds', 'bedside']]
+    ],
+
+    // 氛围不是人物表情，也不是具体画风；单独成类，映射到画风/质感框。
+    mood: [
+      ['搞笑画面', 'funny scene', ['搞笑', '滑稽', '滑稽画面', '滑稽场景', '幽默', '幽默画面', '幽默场景', '好笑', '逗趣', '喜剧感', '喜剧画面', '搞笑场景'], ['funny', 'comedic', 'humorous', 'funny scene', 'comedic scene', 'humorous scene']],
+      ['欢乐氛围', 'joyful atmosphere', ['欢乐', '欢快', '喜庆', '热闹氛围'], ['joyful', 'cheerful atmosphere', 'festive mood']],
+      ['温馨氛围', 'warm atmosphere', ['温馨', '温暖氛围', '治愈氛围'], ['cozy atmosphere', 'heartwarming mood']],
+      ['紧张氛围', 'tense atmosphere', ['紧张', '悬疑氛围', '压迫感'], ['tense mood', 'suspenseful atmosphere']],
+      ['浪漫氛围', 'romantic atmosphere', ['浪漫', '甜蜜氛围'], ['romantic mood', 'sweet atmosphere']],
+      ['恐怖氛围', 'creepy atmosphere', ['恐怖', '阴森氛围', '诡异氛围'], ['eerie atmosphere', 'horror mood']],
+      ['荒诞感', 'absurdist mood', ['荒诞', '无厘头', '离谱'], ['absurd', 'surreal humor']],
+      ['戏剧性', 'dramatic mood', ['戏剧感', '戏剧氛围'], ['dramatic atmosphere', 'theatrical mood']]
     ]
   };
 
@@ -4698,11 +4782,34 @@
     ['天鹅绒', 'velvet'], ['雪纺', 'chiffon'], ['蕾丝', 'lace'], ['针织', 'knit'],
     ['粗花呢', 'tweed'], ['麂皮', 'suede']
   ];
-  const MATERIAL_GARMENTS = GARMENT_ZH.slice(0, 50);
+  // 材质只搭配适合它的核心单品，不做材质 × 全部服装。
+  const MATERIAL_GARMENTS_ZH = {
+    "棉质": ["衬衫", "T恤", "长袖T恤", "连衣裙", "半身裙", "短裤", "牛仔裤", "卫衣", "针织衫", "风衣"],
+    "亚麻": ["衬衫", "短袖衬衫", "连衣裙", "长裙", "阔腿裤", "西装", "短裤", "半身裙"],
+    "丝绸": ["衬衫", "连衣裙", "吊带裙", "长裙", "礼服", "旗袍", "半身裙", "抹胸裙"],
+    "缎面": ["连衣裙", "吊带裙", "礼服", "旗袍", "半身裙", "西装", "衬衫"],
+    "羊毛": ["大衣", "长款大衣", "呢子大衣", "西装", "西装套装", "针织衫", "高领毛衣", "半身裙", "西装裤"],
+    "羊绒": ["大衣", "长款大衣", "针织衫", "高领毛衣", "开衫", "针织连衣裙", "毛衣裙"],
+    "皮革": ["皮夹克", "皮裙", "大衣", "西装", "半身裙", "连衣裙"],
+    "牛仔": ["牛仔外套", "牛仔衬衫", "牛仔裤", "牛仔裙", "短裤", "背带裤", "衬衫", "连衣裙"],
+    "天鹅绒": ["连衣裙", "长裙", "礼服", "旗袍", "半身裙", "西装", "大衣", "吊带裙"],
+    "雪纺": ["衬衫", "连衣裙", "长裙", "吊带裙", "半身裙", "礼服", "抹胸裙", "一字肩连衣裙"],
+    "蕾丝": ["连衣裙", "长裙", "礼服", "婚纱", "旗袍", "半身裙", "吊带裙", "衬衫"],
+    "针织": ["针织衫", "高领毛衣", "开衫", "针织背心", "针织连衣裙", "毛衣裙", "半身裙", "卫衣"],
+    "粗花呢": ["大衣", "长款大衣", "呢子大衣", "西装", "西装套装", "半身裙", "连衣裙"],
+    "麂皮": ["皮夹克", "大衣", "半身裙", "短裙", "连衣裙", "西装", "长裙"],
+  };
+
   MATERIALS.forEach(function (mat) {
-    MATERIAL_GARMENTS.forEach(function (zh) {
+    const list = MATERIAL_GARMENTS_ZH[mat[0]] || [];
+    list.forEach(function (zh) {
       const garment = canonical('outfit', zh);
       if (!garment) return;
+      if (mat[0] === '皮革' && /^皮/.test(garment.zh)) return;
+      if (mat[0] === '麂皮' && /^皮/.test(garment.zh)) return;
+      if (mat[0] === '牛仔' && /牛仔/.test(garment.zh)) return;
+      if (mat[0] === '针织' && /针织/.test(garment.zh)) return;
+      if (/羊毛|羊绒|粗花呢/.test(mat[0]) && /呢子/.test(garment.zh)) return;
       addGenerated(
         'outfit',
         mat[0] + garment.zh,
@@ -4719,9 +4826,24 @@
     '条纹', '格纹', '千鸟格', '波点', '碎花', '豹纹', '斑马纹', '蛇纹',
     '几何图案', '迷彩', '棋盘格'
   ]);
-  const PATTERN_GARMENTS = GARMENT_ZH.slice(0, 38);
+  // 图案只搭配常见单品，不做图案 × 全部服装。
+  const PATTERN_GARMENTS_ZH = {
+    "条纹": ["衬衫", "T恤", "长袖T恤", "针织衫", "连衣裙", "半身裙", "短裙", "西装", "卫衣"],
+    "格纹": ["衬衫", "西装", "大衣", "半身裙", "短裙", "连衣裙", "西装裤"],
+    "千鸟格": ["大衣", "西装", "半身裙", "连衣裙", "短裙"],
+    "波点": ["连衣裙", "衬衫", "半身裙", "短裙", "吊带裙"],
+    "碎花": ["连衣裙", "长裙", "半身裙", "短裙", "吊带裙", "衬衫"],
+    "豹纹": ["连衣裙", "半身裙", "短裙", "大衣", "衬衫"],
+    "斑马纹": ["连衣裙", "半身裙", "短裙", "大衣"],
+    "蛇纹": ["半身裙", "短裙", "连衣裙", "皮夹克", "大衣"],
+    "几何图案": ["连衣裙", "半身裙", "衬衫", "针织衫"],
+    "迷彩": ["工装裤", "短裤", "大衣", "T恤", "卫衣", "军装"],
+    "棋盘格": ["衬衫", "半身裙", "短裙", "连衣裙", "卫衣"],
+  };
+
   patterns.forEach(function (pattern) {
-    PATTERN_GARMENTS.forEach(function (zh) {
+    const list = PATTERN_GARMENTS_ZH[pattern.zh] || [];
+    list.forEach(function (zh) {
       const garment = canonical('outfit', zh);
       if (!garment) return;
       addGenerated(
@@ -4763,9 +4885,10 @@
 
   // 时间 / 天气 × 场景是覆盖率的主战场：只生成常用、语义成立的场景搭配。
   const TIME_ZH = [
-    '清晨', '黎明', '日出', '上午', '中午', '午后', '黄金时刻', '蓝调时刻',
-    '黄昏', '日落', '凌晨', '夜晚', '深夜', '午夜', '春天', '夏天', '秋天',
-    '冬天', '雨季', '雪季'
+    '清晨', '黎明', '日出', '拂晓', '上午', '中午', '午后', '黄金时刻',
+    '蓝调时刻', '黄昏', '日落', '凌晨', '夜晚', '深夜', '午夜', '入夜',
+    '春天', '夏天', '秋天', '冬天', '早春', '春末', '初夏', '盛夏', '初秋',
+    '深秋', '初冬', '雨季', '雪季', '春分', '夏至', '秋分', '冬至'
   ];
   const SCENE_ZH = [
     '街边', '城市街道', '老街道', '小巷', '咖啡馆', '餐厅', '酒吧', '图书馆',
@@ -4789,7 +4912,10 @@
 
   function timePhrase(en) {
     if (/^(golden hour|blue hour|sunrise|sunset)$/i.test(en)) return 'during ' + en;
-    if (/^(early morning|morning|afternoon|early afternoon|spring|summer|autumn|winter|late spring|midsummer|late autumn|deep winter|rainy season|snowy season|holiday)$/i.test(en)) {
+    if (/^(spring equinox|summer solstice|autumn equinox|winter solstice)$/i.test(en)) {
+      return 'during the ' + en;
+    }
+    if (/^(early morning|early hours|morning|afternoon|early afternoon|spring|summer|autumn|winter|early spring|late spring|early summer|midsummer|early autumn|late autumn|early winter|deep winter|rainy season|snowy season|holiday)$/i.test(en)) {
       return 'in the ' + en;
     }
     return 'at ' + en;
@@ -4811,7 +4937,7 @@
   const WEATHER_MODS = [
     ['晴天', 'sunny'], ['多云', 'cloudy'], ['阴天', 'overcast'], ['下雨', 'rainy'],
     ['小雨', 'drizzly'], ['暴雨', 'rain-soaked'], ['下雪', 'snowy'], ['雾', 'foggy'],
-    ['薄雾', 'misty'], ['刮风', 'windy'], ['暴风雨', 'storm-lashed'], ['雷雨', 'thunderous'],
+    ['薄雾', 'misty'], ['刮风', 'windy'], ['暴风雨', 'storm-lashed'], ['雷雨', 'thunderstorm-lit'],
     ['阵雨', 'showery'], ['雪后', 'snow-covered'], ['雨后', 'wet']
   ];
   const WEATHER_SCENE_ZH = [
@@ -4823,30 +4949,11 @@
     '樱花林', '枫叶林', '沙漠公路', '海边悬崖', '浮空岛', '魔法森林',
     '废墟城市', '未来都市', '赛博朋克街区', '蒸汽朋克城市', '和风庭院',
     '中式园林', '屋顶泳池', '天台酒吧', '咖啡馆露台', '森林木屋', '灯塔海岸',
-    '石板街', '林荫大道', '海边公路', '山间小屋', '温泉', '樱花树下',
-    '城市夜景', '天台夜景', '城市雨夜', '城市黄昏', '城市清晨', '海边小镇',
-    '渔村', '水乡', '海岛', '白色沙滩', '礁石海岸', '雪地', '云端', '星空',
-    '银河', '咖啡馆', '餐厅', '酒吧', '图书馆', '书店', '卧室', '客厅', '厨房',
-    '办公室', '教室', '火车站', '地铁站', '机场', '宫殿', '博物馆', '美术馆',
-    '摄影棚', '舞台', '便利店', '商场', '地铁车厢', '公交车内', '火车车厢',
-    '飞机舱', '图书馆阅览室', '大学校园', '健身房', '游泳池', '酒店大堂',
-    '阳台', '窗边', '壁炉旁', '门口', '楼梯', '酒店走廊'
+    '石板街', '林荫大道', '海边公路', '山间小屋', '温泉',
+    '城市夜景', '天台夜景', '城市黄昏', '城市清晨', '海边小镇',
+    '渔村', '水乡', '海岛', '白色沙滩', '礁石海岸', '雪地', '星空', '银河'
   ];
   const weatherScenes = many('scene', WEATHER_SCENE_ZH);
-  const INDOOR_WEATHER_SCENES = {
-    '咖啡馆': true, '餐厅': true, '酒吧': true, '图书馆': true, '书店': true,
-    '卧室': true, '客厅': true, '厨房': true, '办公室': true, '教室': true,
-    '火车站': true, '地铁站': true, '机场': true, '宫殿': true, '博物馆': true,
-    '美术馆': true, '摄影棚': true, '舞台': true, '便利店': true, '商场': true,
-    '地铁车厢': true, '公交车内': true, '火车车厢': true, '飞机舱': true,
-    '图书馆阅览室': true, '大学校园': true, '健身房': true, '游泳池': true,
-    '酒店大堂': true, '阳台': true, '窗边': true, '壁炉旁': true,
-    '门口': true, '楼梯': true, '酒店走廊': true
-  };
-  const INDOOR_WEATHER_OK = {
-    '阴天': true, '下雨': true, '小雨': true, '暴雨': true,
-    '下雪': true, '雨后': true, '雪后': true
-  };
   const PEACEFUL_SCENES = {
     '花园': true, '和风庭院': true, '中式园林': true, '葡萄园': true,
     '茶园': true, '咖啡馆露台': true, '屋顶泳池': true, '天台酒吧': true,
@@ -4854,8 +4961,8 @@
   };
   WEATHER_MODS.forEach(function (weather) {
     weatherScenes.forEach(function (scene) {
-      if (INDOOR_WEATHER_SCENES[scene.zh] && !INDOOR_WEATHER_OK[weather[0]]) return;
       if (/暴风雨|雷雨/.test(weather[0]) && PEACEFUL_SCENES[scene.zh]) return;
+      if (/星空|银河/.test(scene.zh) && /晴天|多云|阴天|下雨|小雨|暴雨|暴风雨|雷雨|阵雨|下雪|雪后|雨后/.test(weather[0])) return;
       const en = weather[1] + ' ' + scene.en;
       addGenerated(
         'scene',
@@ -4889,6 +4996,8 @@
       if (mod[0] === '高对比' && /柔光|漫射光/.test(light.zh)) return;
       if (mod[0] === '冷色' && /烛光|火光/.test(light.zh)) return;
       if (mod[0] === '温暖' && /月光/.test(light.zh)) return;
+      if (/蓝色|红色|紫色|绿色/.test(mod[0]) && /自然光|阳光|晨光|月光|星光/.test(light.zh)) return;
+      if (mod[0] === '金色' && /月光|星光/.test(light.zh)) return;
       addGenerated(
         'light',
         mod[0] + light.zh,

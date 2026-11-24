@@ -3,10 +3,12 @@
  *
  * 处理步骤：
  * 1. 中文标点、英文逗号、换行都作为句子边界；
- * 2. 在「穿着 / 戴着 / 站在 / 坐在 / 背景是 / 光线是 / 镜头是 / 风格是」
+ * 2. 关系句先整体拆角色（谁 / 对什么 / 做什么 / 什么氛围），避免在
+ *    「微笑 / 站着」等提示词处把主体和目标切开；
+ * 3. 在「穿着 / 戴着 / 站在 / 坐在 / 背景是 / 光线是 / 镜头是 / 风格是」
  *    等提示词前切开，保留提示词本身；
- * 3. 用最长词匹配计算每个片段的类别分数，归入六个框之一；
- * 4. 「穿…的… / 戴…的…」定语结构不硬切，避免把人物和服装拆散。
+ * 4. 用最长词匹配计算每个片段的类别分数，归入六个框之一；
+ * 5. 「穿…的… / 戴…的…」定语结构不硬切，避免把人物和服装拆散。
  */
 (function () {
   'use strict';
@@ -255,6 +257,12 @@
     const phrases = U.splitPhrases(raw);
     const chunks = [];
     phrases.forEach(function (phrase) {
+      // 关系句先整体识别，避免「对着镜头微笑」在「微笑」这个姿态提示词处
+      // 被提前切开，丢掉「谁 + 对什么」的关系。
+      if (TR.decomposeRelation(phrase)) {
+        chunks.push(phrase.trim());
+        return;
+      }
       splitByCues(phrase).forEach(function (chunk) {
         if (chunk.trim()) chunks.push(chunk.trim());
       });
@@ -264,6 +272,30 @@
     const segments = [];
 
     chunks.forEach(function (chunk) {
+      // 先拆关系角色：谁 → 人物，动作+目标 → 姿态，物体 → 场景，氛围 → 画风。
+      // 这样「小狗给车轮上撒尿的搞笑画面」不会先被整句翻译再塞进一个框。
+      const relation = TR.decomposeRelation(chunk);
+      if (relation) {
+        relation.segments.forEach(function (role) {
+          const en = U.cleanEnglish(role.en);
+          (role.unknown || []).forEach(function (item) {
+            if (!unknown.includes(item)) unknown.push(item);
+          });
+          if (!en && !(role.unknown || []).length) return;
+          segments.push({
+            text: role.text,
+            zh: U.cleanChinese(role.zh || role.text),
+            en: en,
+            slot: role.slot,
+            cue: null,
+            matches: role.matches || [],
+            unknown: role.unknown || [],
+            source: 'relation'
+          });
+        });
+        return;
+      }
+
       // 中文优先用中文字典；纯英文 / 英文为主的短语退回英文索引，
       // 这样中英混写时不会把整段英文都塞进「场景」。
       let matches = TR.scanZh(chunk);

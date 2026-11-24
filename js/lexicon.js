@@ -365,7 +365,9 @@
       ['书', 'book', ['书本'], ['books']],
       ['长剑', 'longsword', ['剑', '宝剑'], ['long sword', 'sword']],
       ['花', 'flowers', ['花束', '鲜花'], ['flower', 'bouquet']],
-      ['咖啡杯', 'coffee cup', ['咖啡', '拿铁'], ['cup of coffee', 'coffee mug']],
+      ['咖啡杯', 'coffee cup', ['咖啡杯子'], ['cup of coffee', 'coffee mug']],
+      ['咖啡', 'coffee', ['一杯咖啡'], ['coffees']],
+      ['拿铁', 'latte', ['拿铁咖啡'], ['latte coffee']],
       ['酒杯', 'wine glass', ['高脚杯'], ['wineglass']]
     ],
 
@@ -454,6 +456,8 @@
       ['转身', 'turning around', ['回身', '转过身'], ['turning back']],
       ['回头', 'looking back', ['回头看', '回过头'], ['glancing back', 'looking over shoulder']],
       ['回头看镜头', 'looking back at the camera', ['回眸看镜头', '回头看相机'], ['looking back at viewer']],
+      ['回眸', 'looking back over the shoulder', ['回眸一笑', '回望'], ['looking over shoulder']],
+      ['侧身回眸', 'looking back over the shoulder in profile', ['侧身回望'], ['side profile looking back']],
       ['晒太阳', 'sunbathing', ['晒阳光', '晒太阳取暖'], ['basking in the sun']],
       ['侧身', 'sideways', ['侧身站', '身体侧向'], ['side-on', 'turned sideways']],
       ['看向远处', 'looking into the distance', ['望向远方', '眺望远方', '看着远方'], ['gazing into the distance', 'looking afar']],
@@ -581,6 +585,7 @@
       ['雪地', 'snowfield', ['雪原', '雪地里'], ['snowy ground']],
       ['雪山之巅', 'snow-capped mountain summit', ['雪山山顶', '雪山巅峰'], ['snowy mountain peak']],
       ['湿漉漉的地面', 'wet ground', ['潮湿地面', '地面潮湿'], ['wet pavement']],
+      ['湿漉漉的地面反光', 'reflections on the wet ground', ['湿地面反光', '地面积水反光'], ['wet ground reflections']],
       ['地面反光', 'reflections on the ground', ['地面倒影'], ['ground reflections']],
       ['森林小径', 'forest path', ['林间小路'], ['forest trail']],
       ['湖边小屋', 'lakeside cabin', ['湖畔小屋'], ['lake house']],
@@ -865,11 +870,802 @@
     ]
   };
 
+  // 第二轮扩充的人工词条。与上面的基础分组合并后，再按规则生成组合词条。
+  const EXTRA_GROUPS = {
+    subject: [
+      ['亚洲女性', 'Asian woman', ['亚洲女人', '亚裔女性'], ['asian women']],
+      ['欧洲女性', 'European woman', ['欧洲女人', '欧美女性的'], ['european women']],
+      ['非洲女性', 'African woman', ['非洲女人'], ['african women']],
+      ['拉丁裔女性', 'Latina woman', ['拉美女性'], ['latina women']],
+      ['混血女性', 'mixed-race woman', ['混血儿', '混血美女'], ['mixed race woman']],
+      ['成熟女性', 'mature woman', ['成熟女人', '熟女'], ['mature women']],
+      ['青少年', 'teenager', ['青春期的少年', '青少年人'], ['teenagers', 'teen']],
+      ['婴儿', 'baby', ['宝宝', '婴孩'], ['babies', 'infant']],
+      ['大学生', 'college student', ['女大学生', '男大学生'], ['university student']],
+      ['咖啡师', 'barista', ['咖啡店员'], ['baristas']],
+      ['调酒师', 'bartender', ['酒保'], ['bartenders']],
+      ['图书管理员', 'librarian', ['图书馆员'], ['librarians']],
+      ['记者', 'journalist', ['新闻记者'], ['journalists', 'reporter']],
+      ['科学家', 'scientist', ['科研人员'], ['scientists', 'researcher']],
+      ['程序员', 'programmer', ['开发者', '码农'], ['programmers', 'developer']],
+      ['工程师', 'engineer', ['技术人员'], ['engineers']],
+      ['建筑师', 'architect', ['建筑设计师'], ['architects']],
+      ['设计师', 'designer', ['服装设计师'], ['designers']],
+      ['作家', 'writer', ['小说家', '作者'], ['writers', 'author']],
+      ['演员', 'actor', ['女演员', '男演员'], ['actors', 'actress']],
+      ['导演', 'film director', ['电影导演'], ['directors']],
+      ['警察', 'police officer', ['警官', '女警'], ['police', 'cop']],
+      ['消防员', 'firefighter', ['消防队员'], ['firefighters']],
+      ['飞行员', 'pilot', ['机长'], ['pilots']],
+      ['水手', 'sailor', ['船员'], ['sailors']],
+      ['渔夫', 'fisherman', ['渔民'], ['fishermen']],
+      ['农民', 'farmer', ['农夫'], ['farmers']],
+      ['园丁', 'gardener', ['花匠'], ['gardeners']],
+      ['面包师', 'baker', ['烘焙师'], ['bakers']],
+      ['空乘', 'flight attendant', ['空姐', '空少'], ['flight attendants', 'stewardess']],
+      ['服务员', 'waitress', ['女服务员', '服务生'], ['waiters', 'server']],
+      ['矿工', 'miner', ['矿工工人'], ['miners']],
+      ['猎人', 'hunter', ['猎手'], ['hunters']],
+      ['女猎手', 'huntress', ['女猎人'], ['huntresses']],
+      ['吟游诗人', 'bard', ['游吟诗人'], ['bards']],
+      ['祭司', 'priestess', ['女祭司'], ['priestesses']],
+      ['僧侣', 'monk', ['和尚'], ['monks']],
+      ['圣骑士', 'paladin', ['圣武士'], ['paladins']],
+      ['弓箭手', 'archer', ['弓手'], ['archers']],
+      ['剑士', 'swordsman', ['剑客', '女剑士'], ['swordsmen', 'swordswoman']],
+      ['国王', 'king', ['国王陛下'], ['kings']],
+      ['女王', 'queen', ['女王陛下'], ['queens']],
+      ['将军', 'general', ['女将军'], ['generals', 'commander']],
+      ['刺客', 'assassin', ['暗杀者'], ['assassins']],
+      ['盗贼', 'thief', ['小偷', '盗贼女'], ['thieves', 'rogue']],
+      ['牧师', 'priest', ['神父'], ['priests', 'clergyman']],
+      ['吸血鬼', 'vampire', ['吸血鬼伯爵'], ['vampires']],
+      ['狼人', 'werewolf', ['狼人形态'], ['werewolves']],
+      ['半兽人', 'orc', ['兽人'], ['orcs']],
+      ['矮人', 'dwarf', ['矮人族'], ['dwarves']],
+      ['巨人', 'giant', ['巨人族'], ['giants']],
+      ['仙女', 'fairy', ['小仙女', '妖精'], ['fairies']],
+      ['幽灵', 'ghost', ['鬼魂'], ['ghosts', 'spirit']],
+      ['骷髅', 'skeleton', ['骷髅人'], ['skeletons']],
+      ['丧尸', 'zombie', ['僵尸'], ['zombies']],
+      ['外星人', 'alien', ['外星生物'], ['aliens']],
+      ['虚拟偶像', 'virtual idol', ['虚拟歌手'], ['virtual idols']],
+      ['人工智能', 'artificial intelligence', ['AI人物'], ['AI character']]
+    ],
+
+    appearance: [
+      ['长脸', 'long face', ['长形脸'], ['long-faced']],
+      ['高额头', 'high forehead', ['额头高'], ['tall forehead']],
+      ['宽额头', 'broad forehead', ['额头宽'], ['wide forehead']],
+      ['下颌线', 'sharp jawline', ['下颚线', '清晰下颌线'], ['defined jawline']],
+      ['小巧五官', 'delicate features', ['五官小巧', '秀气五官'], ['fine features']],
+      ['立体五官', 'sculpted features', ['五官立体', '深邃五官'], ['strong features']],
+      ['清纯', 'fresh-faced', ['清纯感', '清纯气质'], ['innocent look']],
+      ['冷艳', 'cool beauty', ['冷艳感', '高冷美'], ['cool and elegant']],
+      ['明艳', 'striking beauty', ['明艳动人'], ['strikingly beautiful']],
+      ['英气', 'androgynous charm', ['英气十足', '中性美'], ['charismatic androgyny']],
+      ['梨形身材', 'pear-shaped figure', ['梨形身材比例'], ['pear figure']],
+      ['沙漏身材', 'hourglass figure', ['沙漏型身材'], ['hourglass body']],
+      ['宽肩', 'broad shoulders', ['肩膀宽'], ['wide shoulders']],
+      ['窄肩', 'narrow shoulders', ['肩膀窄'], ['slim shoulders']],
+      ['长颈', 'long neck', ['颈部修长', '天鹅颈'], ['slender neck']],
+      ['修长手指', 'slender fingers', ['手指修长'], ['long fingers']],
+      ['橄榄皮', 'olive skin', ['橄榄色皮肤'], ['olive complexion']],
+      ['冷白皮', 'cool fair skin', ['冷白皮肤'], ['cool pale skin']],
+      ['暖白皮', 'warm fair skin', ['暖白皮肤'], ['warm pale skin']],
+      ['健康肤色', 'healthy glow', ['健康肤质'], ['healthy skin']],
+      ['面部疤痕', 'facial scar', ['脸上有疤'], ['face scar']],
+      ['纹身', 'tattoo', ['刺青', '纹身图案'], ['tattoos']],
+      ['美人尖', 'widow\'s peak', ['发际线美人尖'], ['widows peak']],
+      ['浓密胡须', 'thick beard', ['大胡子'], ['full beard']],
+      ['胡茬', 'stubble', ['短胡须'], ['beard stubble']],
+      ['八字胡', 'mustache', ['小胡子'], ['moustache']],
+      ['山羊胡', 'goatee', ['山羊胡子'], ['goatees']],
+      ['肌肉线条', 'muscle definition', ['肌肉轮廓', '肌肉线条明显'], ['defined muscles']],
+      ['锁骨', 'collarbone', ['锁骨线条'], ['collarbones']],
+      ['背部线条', 'back muscles', ['背部肌肉'], ['defined back']],
+      ['高个子', 'tall person', ['个子高'], ['tall figure']],
+      ['矮个子', 'short person', ['个子矮'], ['short figure']],
+      ['偏瘦', 'very slim', ['很瘦', '瘦削'], ['skinny', 'slender']],
+      ['健壮', 'burly', ['壮实', '体格健壮'], ['strong build']],
+      ['中性风', 'androgynous', ['中性气质', '中性风格'], ['androgyny']]
+    ],
+
+    hair: [
+      ['公主切', 'hime cut', ['公主切发型'], ['hime haircut']],
+      ['狼尾发型', 'wolf cut', ['狼尾头', '狼尾剪'], ['wolf haircut']],
+      ['鲻鱼头', 'mullet', ['鲻鱼发型'], ['mullet haircut']],
+      ['层次剪', 'layered hair', ['层次发型', '层次感发型'], ['layers haircut']],
+      ['碎发', 'textured hair', ['碎发造型'], ['choppy hair']],
+      ['大背头', 'slicked-back hair', ['背头', '油头背头'], ['slick back hair']],
+      ['油头', 'pompadour', ['飞机头'], ['pomp']],
+      ['法式编发', 'French braid', ['法式辫子'], ['french braids']],
+      ['鱼骨辫', 'fishtail braid', ['鱼骨编发'], ['fishtail braids']],
+      ['荷兰辫', 'Dutch braid', ['荷兰编发'], ['dutch braids']],
+      ['高盘发', 'high updo', ['高发髻'], ['high bun updo']],
+      ['低盘发', 'low bun', ['低发髻'], ['low updo']],
+      ['半扎发', 'half-up half-down', ['半扎发型', '半披发'], ['half up half down hair']],
+      ['公主头', 'half-up hairstyle', ['公主头发型'], ['princess hairstyle']],
+      ['双丸子头', 'double buns', ['双丸子发型', '哪吒头'], ['space buns']],
+      ['双麻花辫', 'double braids', ['双辫子', '双麻花'], ['twin braids']],
+      ['八字刘海', 'curtain bangs', ['八字刘海发型'], ['curtain fringe']],
+      ['法式刘海', 'French bangs', ['法式空气刘海'], ['french fringe']],
+      ['眉上刘海', 'micro bangs', ['短刘海', '眉上短刘海'], ['micro fringe']],
+      ['短卷发', 'short curly hair', ['短卷发型'], ['short curls']],
+      ['长卷发', 'long curly hair', ['长卷发型'], ['long curls']],
+      ['蓬松卷发', 'voluminous curls', ['蓬松卷发造型'], ['big curls']],
+      ['手推波纹', 'finger waves', ['手推波纹卷'], ['finger wave hair']],
+      ['复古卷发', 'vintage curls', ['复古卷'], ['retro curls']],
+      ['爆炸头', 'afro', ['爆炸发型'], ['afro hair']],
+      ['脏辫', 'dreadlocks', ['脏辫发型'], ['dreads']],
+      ['编发盘发', 'braided updo', ['编发发髻'], ['braided bun']],
+      ['发髻', 'chignon', ['低发髻'], ['chignons']],
+      ['侧分', 'side part', ['侧分头发', '偏分'], ['side parting']],
+      ['中分', 'center part', ['中分头发', '中间分'], ['middle part']],
+      ['发尾挑染', 'dip-dyed ends', ['发尾染'], ['dip dyed hair']],
+      ['刘海编发', 'braided bangs', ['编刘海'], ['braided fringe']],
+      ['高马尾卷发', 'high ponytail with curls', ['卷发高马尾'], ['curly high ponytail']],
+      ['低发髻', 'low chignon', ['低盘发髻'], ['low bun chignon']]
+    ],
+
+    eyes: [
+      ['狐狸眼', 'fox eyes', ['狐狸眼睛'], ['fox eye shape']],
+      ['丹凤眼', 'phoenix eyes', ['丹凤眼睛'], ['phoenix eye shape']],
+      ['下垂眼', 'droopy eyes', ['狗狗眼'], ['puppy eyes']],
+      ['上挑眼', 'upturned eyes', ['上挑眼睛'], ['upturned eye shape']],
+      ['圆眼', 'round eyes', ['圆圆的眼睛'], ['round eye shape']],
+      ['细长眼', 'narrow eyes', ['细长眼睛'], ['slender eyes']],
+      ['卧蚕', 'aegyo-sal', ['卧蚕眼'], ['under-eye fat']],
+      ['泪痣', 'tear mole', ['眼旁泪痣'], ['teardrop mole']],
+      ['浓密睫毛', 'dense eyelashes', ['浓密长睫毛'], ['thick lashes']],
+      ['湿漉漉眼睛', 'watery eyes', ['水汪汪眼睛', '含泪眼睛'], ['teary eyes']],
+      ['发光眼睛', 'glowing eyes', ['发光的眼睛'], ['luminous eyes']],
+      ['红色眼睛', 'red eyes', ['红眼睛', '红瞳'], ['crimson eyes']],
+      ['金色眼睛', 'golden eyes', ['金眼睛', '金瞳'], ['gold eyes']],
+      ['紫色眼睛', 'purple eyes', ['紫眼睛', '紫瞳'], ['violet eyes']],
+      ['银色眼睛', 'silver eyes', ['银眼睛', '银瞳'], ['silver-colored eyes']]
+    ],
+
+    expression: [
+      ['羞涩', 'shy expression', ['害羞表情', '羞涩表情'], ['shy look']],
+      ['脸红', 'blushing', ['脸颊泛红', '脸红害羞'], ['blush']],
+      ['媚笑', 'alluring smile', ['妩媚微笑'], ['seductive smile']],
+      ['冷笑', 'smirk', ['冷笑表情'], ['smirking']],
+      ['苦笑', 'wry smile', ['无奈的笑'], ['bitter smile']],
+      ['咬唇', 'biting lip', ['轻咬嘴唇'], ['lip bite']],
+      ['惊讶张嘴', 'open-mouthed surprise', ['张嘴惊讶'], ['surprised open mouth']],
+      ['愤怒瞪视', 'angry glare', ['生气瞪眼'], ['furious glare']],
+      ['含泪', 'eyes brimming with tears', ['眼中含泪'], ['teary-eyed']],
+      ['哭泣', 'crying', ['流泪', '哭'], ['tears']],
+      ['眨眼', 'winking', ['单眼眨眼'], ['wink']],
+      ['吐舌', 'tongue out', ['吐舌头'], ['blep']],
+      ['嘟嘴', 'pouting', ['撅嘴'], ['pout']],
+      ['认真', 'focused expression', ['专注表情', '认真表情'], ['focused look']],
+      ['平静', 'calm expression', ['平静神情'], ['calm look']],
+      ['神秘', 'mysterious expression', ['神秘笑容'], ['mysterious look']]
+    ],
+
+    makeup: [
+      ['水光妆', 'dewy makeup', ['水光肌妆容'], ['dewy look']],
+      ['雾面妆', 'matte makeup', ['雾面妆容'], ['matte look']],
+      ['韩系妆容', 'Korean makeup', ['韩妆', '韩式妆容'], ['korean style makeup']],
+      ['日系妆容', 'Japanese makeup', ['日妆', '日式妆容'], ['japanese style makeup']],
+      ['欧美妆', 'Western glam makeup', ['欧美妆容', '欧美浓妆'], ['western makeup']],
+      ['复古红唇', 'retro red lips', ['复古红唇妆'], ['vintage red lips']],
+      ['豆沙色唇', 'mauve lips', ['豆沙唇', '豆沙色口红'], ['mauve lipstick']],
+      ['咬唇妆', 'gradient lips', ['咬唇妆感'], ['gradient lip makeup']],
+      ['卧蚕妆', 'aegyo-sal makeup', ['卧蚕妆容'], ['under-eye makeup']],
+      ['截断式眼妆', 'cut crease eyeshadow', ['截断眼妆'], ['cut crease']],
+      ['亮片眼妆', 'glitter eye makeup', ['亮片眼影'], ['glitter eyes']],
+      ['蓝色眼影', 'blue eyeshadow', ['蓝眼影'], ['blue eye shadow']],
+      ['紫色眼影', 'purple eyeshadow', ['紫眼影'], ['purple eye shadow']],
+      ['大地色眼影', 'earth-tone eyeshadow', ['大地色眼妆'], ['neutral eyeshadow']],
+      ['野生眉', 'fluffy brows', ['野生眉毛'], ['bushy eyebrows']],
+      ['细眉', 'thin eyebrows', ['细眉毛'], ['thin brows']],
+      ['假睫毛', 'false lashes', ['假睫毛妆'], ['fake eyelashes']],
+      ['美瞳', 'colored contacts', ['彩色隐形眼镜'], ['color contacts']],
+      ['高光修容', 'highlighter and contour', ['修容高光'], ['contouring and highlight']],
+      ['晒伤妆', 'sunburn makeup', ['晒伤腮红'], ['sunburn blush']],
+      ['雀斑妆', 'freckled makeup', ['雀斑妆容'], ['faux freckles']],
+      ['猫眼眼线', 'cat-eye eyeliner', ['猫眼线'], ['cat eye liner']],
+      ['红色眼影', 'red eyeshadow', ['红眼影'], ['red eye shadow']],
+      ['金色眼影', 'gold eyeshadow', ['金眼影'], ['gold eye shadow']]
+    ],
+
+    outfit: [
+      ['抹胸裙', 'strapless dress', ['抹胸连衣裙'], ['strapless gown']],
+      ['一字肩连衣裙', 'off-shoulder dress', ['一字肩裙', '露肩连衣裙'], ['off shoulder dress']],
+      ['泡泡袖连衣裙', 'puff-sleeve dress', ['泡泡袖裙'], ['puff sleeve dress']],
+      ['衬衫裙', 'shirt dress', ['衬衫式连衣裙'], ['shirtdress']],
+      ['针织连衣裙', 'knit dress', ['毛线连衣裙'], ['knitted dress']],
+      ['毛衣裙', 'sweater dress', ['毛衣连衣裙'], ['sweater dresses']],
+      ['皮裙', 'leather skirt', ['皮质半身裙'], ['leather skirts']],
+      ['牛仔裙', 'denim skirt', ['丹宁裙'], ['denim skirts']],
+      ['百褶短裙', 'pleated mini skirt', ['短款百褶裙'], ['pleated mini skirts']],
+      ['A字裙', 'A-line skirt', ['A字半身裙', 'A形裙'], ['a line skirt']],
+      ['包臀裙', 'pencil skirt', ['铅笔裙', '紧身裙'], ['pencil skirts']],
+      ['伞裙', 'full skirt', ['大摆裙'], ['flared skirt']],
+      ['鱼尾裙', 'mermaid skirt', ['鱼尾半身裙'], ['mermaid skirts']],
+      ['工装裙', 'cargo skirt', ['工装半身裙'], ['cargo skirts']],
+      ['骑行裤', 'biker shorts', ['单车裤'], ['cycling shorts']],
+      ['西装短裤', 'tailored shorts', ['正装短裤'], ['dress shorts']],
+      ['背带裙', 'pinafore dress', ['吊带背带裙'], ['pinafores']],
+      ['连体裤', 'jumpsuit', ['连身裤', '连体衣'], ['jumpsuits']],
+      ['呢子大衣', 'wool coat', ['羊毛大衣'], ['woolen coat']],
+      ['派克大衣', 'parka', ['派克服'], ['parkas']],
+      ['羊羔毛外套', 'shearling jacket', ['羊羔绒外套'], ['shearling coat']],
+      ['飞行员夹克', 'bomber jacket', ['飞行夹克'], ['bomber jackets']],
+      ['棒球服', 'varsity jacket', ['棒球夹克'], ['letterman jacket']],
+      ['运动夹克', 'track jacket', ['运动外套'], ['sports jacket']],
+      ['防晒服', 'sun-protection jacket', ['防晒衣'], ['sun jacket']],
+      ['马甲', 'vest', ['背心马甲'], ['vests']],
+      ['西装马甲', 'suit vest', ['西装背心'], ['waistcoat']],
+      ['针织背心', 'knit vest', ['毛衣背心'], ['sweater vest']],
+      ['法式衬衫', 'French shirt', ['法式衬衣'], ['french blouse']],
+      ['古巴领衬衫', 'camp collar shirt', ['古巴衬衫'], ['camp shirt']],
+      ['夏威夷衬衫', 'Hawaiian shirt', ['花衬衫'], ['hawaiian shirts']],
+      ['牛仔衬衫', 'denim shirt', ['丹宁衬衫'], ['denim shirts']],
+      ['格子衬衫', 'plaid shirt', ['格纹衬衫'], ['plaid shirts']],
+      ['短袖衬衫', 'short-sleeve shirt', ['短袖衬衣'], ['short sleeve shirt']],
+      ['长袖T恤', 'long-sleeve t-shirt', ['长袖T恤衫'], ['long sleeve tee']],
+      ['印花T恤', 'graphic t-shirt', ['图案T恤'], ['graphic tee']],
+      ['运动内衣', 'sports bra', ['运动文胸'], ['sports bras']],
+      ['比基尼', 'bikini', ['比基尼泳装'], ['bikinis']],
+      ['连体泳衣', 'one-piece swimsuit', ['连体泳装'], ['one piece swimsuit']],
+      ['潜水服', 'wetsuit', ['潜水衣'], ['wetsuits', 'diving suit']],
+      ['滑雪服', 'ski suit', ['滑雪装'], ['ski suits']],
+      ['羽绒马甲', 'down vest', ['羽绒背心'], ['puffer vest']],
+      ['皮裤', 'leather pants', ['皮长裤'], ['leather trousers']],
+      ['阔腿牛仔裤', 'wide-leg jeans', ['阔腿牛仔'], ['wide leg jeans']],
+      ['直筒牛仔裤', 'straight-leg jeans', ['直筒牛仔'], ['straight leg jeans']],
+      ['紧身牛仔裤', 'skinny jeans', ['修身牛仔裤'], ['skinny jean']],
+      ['喇叭裤', 'flared pants', ['喇叭长裤'], ['flare pants']],
+      ['烟管裤', 'cigarette pants', ['烟管长裤'], ['cigarette trousers']],
+      ['哈伦裤', 'harem pants', ['灯笼裤'], ['harem trousers']],
+      ['运动裤', 'sweatpants', ['卫裤'], ['track pants']],
+      ['瑜伽裤', 'yoga pants', ['瑜伽长裤'], ['yoga leggings']],
+      ['工装短裤', 'cargo shorts', ['工装裤短款'], ['cargo short']],
+      ['百慕大短裤', 'Bermuda shorts', ['百慕达短裤'], ['bermuda short']],
+      ['JK制服', 'JK uniform', ['JK校服', '日式校服'], ['jk school uniform']],
+      ['洛丽塔', 'Lolita dress', ['洛丽塔裙', 'Lolita裙'], ['lolita fashion']],
+      ['女仆装', 'maid outfit', ['女仆服装'], ['maid dress']],
+      ['护士服', 'nurse uniform', ['护士制服'], ['nurse dress']],
+      ['空姐制服', 'flight attendant uniform', ['空乘制服'], ['stewardess uniform']],
+      ['警服', 'police uniform', ['警察制服'], ['police uniforms']],
+      ['消防服', 'firefighter suit', ['消防战斗服'], ['firefighter gear']],
+      ['太空服', 'spacesuit', ['宇航服'], ['space suit']],
+      ['防护服', 'hazmat suit', ['防化服'], ['hazmat suits']],
+      ['和风浴衣', 'yukata', ['浴衣'], ['yukatas']],
+      ['韩服', 'hanbok', ['朝鲜族服饰'], ['hanboks']],
+      ['纱丽', 'sari', ['印度纱丽'], ['saree']],
+      ['苏格兰裙', 'kilt', ['苏格兰短裙'], ['kilts']],
+      ['Cosplay服装', 'cosplay costume', ['角色扮演服装'], ['cosplay outfit']],
+      ['吊带背心', 'camisole', ['吊带衫'], ['camisoles']],
+      ['抹胸', 'bandeau top', ['抹胸上衣'], ['bandeau']],
+      ['高腰裤', 'high-waisted pants', ['高腰长裤'], ['high waist pants']],
+      ['低腰裤', 'low-rise pants', ['低腰长裤'], ['low rise pants']],
+      ['直筒裤', 'straight-leg pants', ['直筒长裤'], ['straight leg pants']],
+      ['背带短裤', 'overall shorts', ['背带短裤装'], ['short overalls']],
+      ['机车裤', 'moto pants', ['机车长裤'], ['motorcycle pants']],
+      ['工装马甲', 'utility vest', ['机能马甲'], ['utility vests']],
+      ['战术背心', 'tactical vest', ['战术马甲'], ['tactical vests']]
+    ],
+
+    accessory: [
+      ['渔夫帽', 'bucket hat', ['渔夫帽子'], ['bucket hats']],
+      ['牛仔帽', 'cowboy hat', ['西部牛仔帽'], ['cowboy hats']],
+      ['钟形帽', 'cloche hat', ['钟形女帽'], ['cloche hats']],
+      ['头巾', 'headscarf', ['包头巾'], ['headscarves']],
+      ['发簪', 'hair stick', ['簪子', '发钗'], ['hair sticks']],
+      ['发绳', 'hair tie', ['发圈'], ['hair ties']],
+      ['腰包', 'waist bag', ['腰包袋'], ['waist bags', 'fanny pack']],
+      ['公文包', 'briefcase', ['商务公文包'], ['briefcases']],
+      ['钱包', 'wallet', ['皮夹'], ['wallets']],
+      ['手拿包', 'clutch', ['手抓包'], ['clutches']],
+      ['托特包', 'tote bag', ['托特手提包'], ['tote bags']],
+      ['水桶包', 'bucket bag', ['水桶手提包'], ['bucket bags']],
+      ['链条包', 'chain bag', ['链条小包'], ['chain bags']],
+      ['耳骨夹', 'ear cuff', ['耳骨夹饰'], ['ear cuffs']],
+      ['鼻环', 'nose ring', ['鼻钉'], ['nose rings']],
+      ['唇钉', 'lip ring', ['唇环'], ['lip rings']],
+      ['眉钉', 'eyebrow piercing', ['眉环'], ['eyebrow piercings']],
+      ['颈圈', 'choker', ['choker项链'], ['chokers']],
+      ['锁骨链', 'collarbone chain', ['锁骨项链'], ['collarbone chains']],
+      ['臂环', 'armlet', ['臂钏'], ['armlets']],
+      ['脚链', 'anklet', ['脚踝链'], ['anklets']],
+      ['领带', 'necktie', ['领带饰'], ['neckties', 'tie']],
+      ['领结', 'bow tie', ['蝴蝶领结'], ['bow ties']],
+      ['领巾', 'neckerchief', ['颈巾'], ['neckerchiefs']],
+      ['胸针', 'brooch', ['胸花'], ['brooches']],
+      ['徽章', 'badge', ['徽章饰'], ['badges']],
+      ['肩章', 'epaulette', ['肩饰'], ['epaulettes']],
+      ['眼罩', 'eyepatch', ['单眼眼罩'], ['eye patch']],
+      ['手杖', 'walking stick', ['拐杖'], ['walking sticks', 'cane']],
+      ['弓', 'bow', ['弓箭'], ['bows']],
+      ['箭', 'arrows', ['箭矢'], ['arrow']],
+      ['法杖', 'staff', ['魔法杖'], ['magic staff']],
+      ['盾牌', 'shield', ['盾'], ['shields']],
+      ['匕首', 'dagger', ['短刀'], ['daggers']],
+      ['折扇', 'folding fan', ['扇子'], ['folding fans']],
+      ['油纸伞', 'oil-paper umbrella', ['纸伞'], ['oil paper umbrella']],
+      ['灯笼', 'lantern', ['提灯'], ['lanterns']]
+    ],
+
+    material: [
+      ['棉麻', 'cotton-linen', ['棉麻材质'], ['cotton linen']],
+      ['涤纶', 'polyester', ['聚酯纤维'], ['polyester fabric']],
+      ['氨纶', 'spandex', ['弹力纤维'], ['elastane']],
+      ['灯芯绒', 'corduroy', ['灯芯绒材质'], ['corduroy fabric']],
+      ['欧根纱', 'organza', ['欧根纱材质'], ['organza fabric']],
+      ['薄纱', 'tulle', ['薄纱材质'], ['tulle fabric']],
+      ['网纱', 'mesh', ['网眼纱'], ['mesh fabric']],
+      ['人造毛', 'faux fur', ['人造皮草'], ['faux fur fabric']],
+      ['毛呢', 'woolen', ['毛呢材质'], ['wool fabric']],
+      ['亮片', 'sequined', ['亮片材质'], ['sequin', 'sequins']],
+      ['珠片', 'beaded', ['串珠'], ['beadwork']],
+      ['羽毛', 'feather', ['羽毛装饰'], ['feathers']],
+      ['绒毛', 'plush', ['长毛绒'], ['plush fabric']],
+      ['全息', 'holographic', ['全息材质'], ['holo']],
+      ['镭射', 'iridescent', ['镭射材质'], ['iridescent material']],
+      ['磨砂', 'frosted', ['磨砂材质'], ['frosted finish']],
+      ['亚克力', 'acrylic', ['亚克力材质'], ['acrylic material']]
+    ],
+
+    color: [
+      ['珊瑚色', 'coral', ['珊瑚粉', '珊瑚红'], ['coral pink']],
+      ['裸色', 'nude', ['裸粉色'], ['nude tone']],
+      ['香槟色', 'champagne', ['香槟金'], ['champagne gold']],
+      ['玫瑰金', 'rose gold', ['玫瑰金色'], ['rose golden']],
+      ['亚麻色', 'flaxen', ['亚麻金', '亚麻棕'], ['flaxen blonde']],
+      ['奶茶色', 'milk tea', ['奶茶棕', '奶茶色系'], ['milk tea brown']],
+      ['焦糖色', 'caramel', ['焦糖棕'], ['caramel brown']],
+      ['巧克力色', 'chocolate', ['巧克力棕'], ['chocolate brown']],
+      ['铂金色', 'platinum blonde', ['铂金白金色'], ['platinum']],
+      ['雾霾蓝', 'dusty blue', ['雾蓝色'], ['hazy blue']],
+      ['深红', 'deep red', ['暗红', '深红色'], ['dark red']],
+      ['柠檬黄', 'lemon yellow', ['柠檬色'], ['lemon']],
+      ['奶油黄', 'butter yellow', ['奶油黄色'], ['buttery yellow']],
+      ['孔雀蓝', 'peacock blue', ['孔雀蓝色'], ['peacock']],
+      ['宝石蓝', 'sapphire blue', ['宝蓝色'], ['sapphire']],
+      ['祖母绿', 'emerald green', ['祖母绿色'], ['emerald']],
+      ['灰粉色', 'dusty pink', ['灰粉', '莫兰迪粉'], ['muted pink']],
+      ['豆沙色', 'mauve', ['豆沙红'], ['mauve color']],
+      ['墨蓝', 'ink blue', ['墨蓝色'], ['dark ink blue']],
+      ['军绿', 'army green', ['军绿色'], ['military green']],
+      ['荧光绿', 'neon green', ['荧光绿色'], ['neon lime']],
+      ['荧光粉', 'neon pink', ['荧光粉色'], ['hot pink']],
+      ['彩虹色', 'rainbow colors', ['彩虹色调'], ['rainbow']],
+      ['金属色', 'metallic', ['金属质感色'], ['metallic tone']],
+      ['珠光色', 'pearlescent', ['珠光白'], ['pearl finish']],
+      ['双色', 'two-tone', ['双色调'], ['two tone']],
+      ['金色', 'gold', ['黄金色'], ['golden']],
+      ['银色', 'silver', ['银白色'], ['silvery']],
+      ['铜色', 'bronze', ['古铜色'], ['bronze tone']],
+      ['渐变色', 'gradient colors', ['渐变色调'], ['gradient']]
+    ],
+
+    pose: [
+      ['侧躺', 'lying on side', ['侧卧', '侧躺着'], ['lying sideways']],
+      ['趴着', 'lying on stomach', ['趴卧'], ['lying prone']],
+      ['仰躺', 'lying on back', ['仰卧'], ['lying supine']],
+      ['盘腿坐', 'sitting cross-legged', ['盘腿坐姿'], ['cross-legged sitting']],
+      ['跷二郎腿', 'crossing legs', ['跷腿'], ['legs crossed']],
+      ['抱膝', 'hugging knees', ['抱膝坐'], ['knees hugged']],
+      ['单膝跪地', 'kneeling on one knee', ['单膝跪'], ['one knee down']],
+      ['半蹲', 'half squat', ['半蹲姿势'], ['half-squatting']],
+      ['弯腰', 'bending over', ['弯腰动作'], ['bent over']],
+      ['伸懒腰', 'stretching', ['伸展身体'], ['stretching arms']],
+      ['打哈欠', 'yawning', ['打呵欠'], ['yawn']],
+      ['揉眼睛', 'rubbing eyes', ['揉眼'], ['rubbing her eyes']],
+      ['整理头发', 'fixing hair', ['拨弄头发'], ['adjusting hair']],
+      ['双手合十', 'hands clasped', ['合掌'], ['palms together']],
+      ['祈祷', 'praying', ['祈祷姿势'], ['prayer pose']],
+      ['鼓掌', 'clapping', ['拍手'], ['applauding']],
+      ['比心', 'making a heart gesture', ['比心手势'], ['heart hands']],
+      ['竖大拇指', 'thumbs up', ['点赞手势'], ['thumbs-up']],
+      ['比耶', 'peace sign', ['剪刀手'], ['v sign']],
+      ['指向前方', 'pointing forward', ['指向远处'], ['pointing ahead']],
+      ['双手背后', 'hands behind back', ['手放背后'], ['hands clasped behind back']],
+      ['扶眼镜', 'adjusting glasses', ['推眼镜'], ['pushing up glasses']],
+      ['拿手机', 'holding a phone', ['拿着手机'], ['holding smartphone']],
+      ['看手机', 'looking at phone', ['低头看手机'], ['looking at smartphone']],
+      ['打电话', 'talking on phone', ['通电话'], ['on the phone']],
+      ['写字', 'writing', ['写东西'], ['writing something']],
+      ['画画', 'painting', ['作画'], ['painting a picture']],
+      ['做饭', 'cooking', ['烹饪'], ['cooking food']],
+      ['倒咖啡', 'pouring coffee', ['倒咖啡动作'], ['pouring a coffee']],
+      ['切菜', 'chopping vegetables', ['切蔬菜'], ['chopping food']],
+      ['浇花', 'watering plants', ['给花浇水'], ['watering flowers']],
+      ['遛狗', 'walking a dog', ['遛狗狗'], ['walking the dog']],
+      ['骑马', 'riding a horse', ['策马'], ['horseback riding']],
+      ['游泳', 'swimming', ['游水'], ['swim']],
+      ['冲浪', 'surfing', ['冲浪运动'], ['surf']],
+      ['滑雪', 'skiing', ['滑雪运动'], ['ski']],
+      ['滑板', 'skateboarding', ['玩滑板'], ['skateboard']],
+      ['骑摩托', 'riding a motorcycle', ['骑摩托车'], ['motorcycle riding']],
+      ['驾驶', 'driving', ['开车'], ['driving a car']],
+      ['漂浮', 'floating', ['漂浮在空中'], ['float']],
+      ['悬浮', 'levitating', ['悬浮空中'], ['levitation']],
+      ['倒立', 'handstand', ['倒立姿势'], ['handstand pose']],
+      ['武术动作', 'martial arts pose', ['武术姿势'], ['kung fu pose']],
+      ['拔剑', 'drawing a sword', ['拔剑动作'], ['unsheathing a sword']],
+      ['挥剑', 'swinging a sword', ['挥舞长剑'], ['sword swing']],
+      ['射箭', 'drawing a bow', ['拉弓射箭'], ['archery pose']],
+      ['施法', 'casting a spell', ['施放魔法'], ['spellcasting']],
+      ['弹钢琴', 'playing piano', ['弹琴'], ['playing the piano']],
+      ['拉小提琴', 'playing violin', ['拉琴'], ['playing the violin']],
+      ['打鼓', 'playing drums', ['击鼓'], ['drumming']],
+      ['唱歌', 'singing', ['歌唱'], ['sing']],
+      ['旋转', 'spinning', ['旋转动作'], ['twirling']],
+      ['坐在台阶上', 'sitting on steps', ['坐在阶梯上'], ['seated on stairs']],
+      ['躺在沙发上', 'lying on sofa', ['躺在沙发'], ['lying on a couch']],
+      ['趴在地上', 'lying on the ground', ['趴地'], ['prone on the ground']]
+    ],
+
+    scene: [
+      ['公寓', 'apartment', ['公寓房间'], ['apartments', 'flat']],
+      ['别墅', 'villa', ['独栋别墅'], ['villas']],
+      ['豪宅', 'mansion', ['豪华宅邸'], ['mansions']],
+      ['小屋', 'cabin', ['小木屋'], ['cabins']],
+      ['宫殿', 'palace', ['皇宫'], ['palaces']],
+      ['古城墙', 'ancient city wall', ['城墙'], ['old city wall']],
+      ['广场', 'plaza', ['城市广场'], ['plazas', 'square']],
+      ['商业街', 'shopping street', ['商业街区'], ['shopping district']],
+      ['步行街', 'pedestrian street', ['步行街区'], ['pedestrian zone']],
+      ['夜市', 'night market', ['夜市街道'], ['night markets']],
+      ['便利店', 'convenience store', ['便利商店'], ['convenience shops']],
+      ['超市', 'supermarket', ['超级市场'], ['supermarkets', 'grocery store']],
+      ['商场', 'shopping mall', ['购物中心'], ['mall', 'shopping center']],
+      ['市场', 'market', ['集市'], ['markets', 'bazaar']],
+      ['学校', 'school', ['校园'], ['schools', 'campus']],
+      ['医院', 'hospital', ['医院走廊'], ['hospitals']],
+      ['电影院', 'cinema', ['影厅'], ['movie theater']],
+      ['剧院', 'theater', ['歌剧院'], ['theatre', 'opera house']],
+      ['体育馆', 'stadium', ['体育场'], ['stadiums', 'arena']],
+      ['游泳池', 'swimming pool', ['泳池'], ['pools']],
+      ['健身房', 'gym', ['健身中心'], ['gyms', 'fitness center']],
+      ['录音棚', 'recording studio', ['录音室'], ['music studio']],
+      ['舞台后台', 'backstage', ['后台'], ['back stage']],
+      ['停车场', 'parking lot', ['地下停车场'], ['parking garage']],
+      ['加油站', 'gas station', ['加油 station'], ['petrol station']],
+      ['高速公路', 'highway', ['高速路'], ['freeway']],
+      ['公路', 'road', ['公路旁'], ['roads']],
+      ['立交桥', 'overpass', ['高架桥'], ['overpasses', 'flyover']],
+      ['地铁车厢', 'subway car', ['地铁车内'], ['metro car']],
+      ['公交车内', 'bus interior', ['公交车里'], ['inside a bus']],
+      ['火车车厢', 'train car', ['火车内'], ['train interior']],
+      ['飞机舱', 'airplane cabin', ['机舱'], ['aircraft cabin']],
+      ['游艇', 'yacht', ['豪华游艇'], ['yachts']],
+      ['帆船', 'sailboat', ['帆船船'], ['sailboats']],
+      ['洞穴', 'cave', ['山洞'], ['caves']],
+      ['火山', 'volcano', ['火山口'], ['volcanoes']],
+      ['冰川', 'glacier', ['冰川地貌'], ['glaciers']],
+      ['瀑布', 'waterfall', ['瀑布群'], ['waterfalls']],
+      ['溪流', 'stream', ['小溪'], ['streams', 'creek']],
+      ['稻田', 'rice field', ['水稻田'], ['rice fields']],
+      ['茶园', 'tea plantation', ['茶园梯田'], ['tea fields']],
+      ['葡萄园', 'vineyard', ['葡萄庄园'], ['vineyards']],
+      ['樱花林', 'cherry blossom forest', ['樱花树林', '樱花林间'], ['sakura forest']],
+      ['枫叶林', 'maple forest', ['枫树林'], ['maple woods']],
+      ['雪松林', 'cedar forest', ['雪松林间'], ['cedar woods']],
+      ['沙漠公路', 'desert highway', ['沙漠公路旁'], ['desert road']],
+      ['海边悬崖', 'seaside cliff', ['海岸悬崖'], ['coastal cliff']],
+      ['海底', 'underwater', ['海底世界'], ['under water']],
+      ['珊瑚礁', 'coral reef', ['珊瑚礁群'], ['coral reefs']],
+      ['极光', 'aurora', ['极光天空'], ['northern lights', 'aurora borealis']],
+      ['星空', 'starry sky', ['满天星空'], ['starry night sky']],
+      ['银河', 'milky way', ['银河星空'], ['galaxy']],
+      ['月球', 'moon surface', ['月球表面'], ['lunar surface']],
+      ['太空', 'outer space', ['宇宙空间'], ['space']],
+      ['云端', 'above the clouds', ['云海'], ['cloud sea']],
+      ['浮空岛', 'floating island', ['天空浮岛'], ['floating islands']],
+      ['魔法森林', 'enchanted forest', ['奇幻森林'], ['magical forest']],
+      ['废墟城市', 'ruined city', ['城市废墟'], ['ruins of a city']],
+      ['未来都市', 'futuristic metropolis', ['未来城市'], ['future city']],
+      ['赛博朋克街区', 'cyberpunk district', ['赛博朋克街道'], ['cyberpunk street']],
+      ['蒸汽朋克城市', 'steampunk city', ['蒸汽朋克都市'], ['steampunk metropolis']],
+      ['古代宫殿', 'ancient palace', ['古代皇宫'], ['old palace']],
+      ['和风庭院', 'Japanese garden', ['日式庭院'], ['japanese style garden']],
+      ['中式园林', 'Chinese garden', ['中国园林'], ['chinese style garden']],
+      ['欧式庭院', 'European courtyard', ['欧式庭院'], ['european courtyard']],
+      ['屋顶泳池', 'rooftop pool', ['天台泳池'], ['roof pool']],
+      ['天台酒吧', 'rooftop bar', ['楼顶酒吧'], ['roof bar']],
+      ['咖啡馆露台', 'cafe terrace', ['咖啡露台'], ['café terrace']],
+      ['街角便利店', 'corner convenience store', ['街角小店'], ['corner store']],
+      ['森林木屋', 'forest cabin', ['林间木屋'], ['woodland cabin']],
+      ['灯塔海岸', 'lighthouse coast', ['灯塔海边'], ['lighthouse shoreline']]
+    ],
+
+    time: [
+      ['凌晨', 'early hours', ['凌晨时分'], ['small hours']],
+      ['拂晓', 'daybreak', ['破晓时分'], ['break of dawn']],
+      ['上午', 'morning', ['上午时分'], ['late morning']],
+      ['中午', 'midday', ['正午时分'], ['noon']],
+      ['午后', 'early afternoon', ['午后时分'], ['afternoon']],
+      ['入夜', 'nightfall', ['入夜时分'], ['fall of night']],
+      ['夜半', 'middle of the night', ['半夜时分'], ['dead of night']],
+      ['春末', 'late spring', ['暮春'], ['end of spring']],
+      ['盛夏', 'midsummer', ['仲夏'], ['high summer']],
+      ['深秋', 'late autumn', ['暮秋'], ['late fall']],
+      ['隆冬', 'deep winter', ['寒冬'], ['midwinter']],
+      ['雨季', 'rainy season', ['梅雨季'], ['wet season']],
+      ['雪季', 'snowy season', ['冬季雪季'], ['snow season']],
+      ['节日', 'holiday', ['节庆'], ['festival']]
+    ],
+
+    weather: [
+      ['雷雨', 'thunderstorm', ['雷雨天'], ['thunder storm']],
+      ['阵雨', 'shower', ['阵雨天'], ['rain shower']],
+      ['毛毛雨', 'drizzle', ['毛毛雨天'], ['drizzling']],
+      ['暴雪', 'blizzard', ['暴风雪'], ['snowstorm']],
+      ['雨夹雪', 'sleet', ['雨雪'], ['rain and snow']],
+      ['冰雹', 'hail', ['冰雹天'], ['hailstorm']],
+      ['沙尘', 'dust storm', ['沙尘暴'], ['sandstorm']],
+      ['彩虹', 'rainbow', ['彩虹天'], ['rainbows']],
+      ['潮湿', 'humid', ['湿润'], ['humid weather']],
+      ['闷热', 'muggy', ['闷热天气'], ['stuffy']],
+      ['寒冷', 'cold', ['寒冷天气'], ['chilly']],
+      ['微风', 'light breeze', ['微风吹拂'], ['gentle breeze']],
+      ['大风', 'strong wind', ['强风'], ['gale']],
+      ['台风', 'typhoon', ['台风天'], ['typhoons']],
+      ['雪后', 'after snow', ['雪后初晴'], ['post-snow']]
+    ],
+
+    light: [
+      ['底光', 'underlighting', ['底部光'], ['under lighting']],
+      ['漫射光', 'diffused light', ['散射光'], ['diffuse light']],
+      ['直射光', 'direct light', ['直射阳光'], ['direct sunlight']],
+      ['星光', 'starlight', ['星星光'], ['star light']],
+      ['火光', 'firelight', ['火焰光'], ['fire light']],
+      ['LED光', 'LED lighting', ['LED灯'], ['led light']],
+      ['环形灯', 'ring light', ['环形补光'], ['ring lighting']],
+      ['聚光灯', 'spotlight', ['聚光照明'], ['spot light']],
+      ['舞台光', 'stage lighting', ['舞台灯光'], ['stage light']],
+      ['蝴蝶光', 'butterfly lighting', ['蝴蝶光布光'], ['butterfly light']],
+      ['伦勃朗光', 'Rembrandt lighting', ['伦勃朗布光'], ['rembrandt light']],
+      ['环形光', 'loop lighting', ['环形布光'], ['loop light']],
+      ['分割光', 'split lighting', ['分割布光'], ['split light']],
+      ['双色光', 'bi-color lighting', ['双色灯'], ['bicolor lighting']],
+      ['边缘光', 'edge light', ['边缘轮廓光'], ['edge lighting']],
+      ['中性光', 'neutral light', ['中性色温光'], ['neutral lighting']],
+      ['蓝色光', 'blue light', ['蓝光'], ['blue lighting']],
+      ['红色光', 'red light', ['红光'], ['red lighting']],
+      ['紫色光', 'purple light', ['紫光'], ['purple lighting']],
+      ['绿色光', 'green light', ['绿光'], ['green lighting']],
+      ['暖白灯光', 'warm white light', ['暖白灯'], ['warm white lighting']],
+      ['冷白灯光', 'cool white light', ['冷白灯'], ['cool white lighting']],
+      ['水面反光', 'water reflections', ['水面倒影'], ['reflections on water']],
+      ['玻璃反光', 'glass reflections', ['玻璃倒影'], ['reflections on glass']],
+      ['霓虹反光', 'neon reflections', ['霓虹倒影'], ['neon reflection']],
+      ['火光映照', 'firelight glow', ['火光映衬'], ['glow of firelight']]
+    ],
+
+    camera: [
+      ['14mm', '14mm', ['14毫米'], ['14 mm']],
+      ['20mm', '20mm', ['20毫米'], ['20 mm']],
+      ['28mm', '28mm', ['28毫米'], ['28 mm']],
+      ['100mm', '100mm', ['100毫米'], ['100 mm']],
+      ['200mm', '200mm', ['200毫米'], ['200 mm']],
+      ['400mm', '400mm', ['400毫米'], ['400 mm']],
+      ['超广角', 'ultra-wide angle', ['超广角镜头'], ['ultra wide angle']],
+      ['中焦', 'medium telephoto', ['中焦镜头'], ['medium tele']],
+      ['微距特写', 'macro close-up', ['微距近摄'], ['macro closeup']],
+      ['远景', 'extreme wide shot', ['大远景'], ['extreme wide']],
+      ['中近景', 'medium close-up', ['中近景镜头'], ['medium closeup']],
+      ['牛仔镜头', 'cowboy shot', ['牛仔景别'], ['cowboy framing']],
+      ['虫眼视角', 'worm\'s-eye view', ['虫眼视角'], ['worm eye view']],
+      ['四分之三侧脸', 'three-quarter view', ['四分之三侧面'], ['3/4 view']],
+      ['背影', 'back view', ['背面视角', '背影镜头'], ['view from behind']],
+      ['侧面侧拍', 'side view', ['侧面视角'], ['profile view']],
+      ['第一人称视角', 'first-person view', ['第一人称'], ['first person view', 'pov']],
+      ['主观镜头', 'POV shot', ['POV镜头'], ['point of view shot']],
+      ['框架构图', 'frame within a frame', ['框中框构图'], ['framing within a frame']],
+      ['引导线构图', 'leading lines', ['引导线'], ['leading line composition']],
+      ['黄金分割', 'golden ratio composition', ['黄金比例构图'], ['golden ratio']],
+      ['对角构图', 'diagonal composition', ['对角线构图'], ['diagonal framing']],
+      ['极简构图', 'minimalist composition', ['极简构图法'], ['minimal composition']],
+      ['紧凑构图', 'tight framing', ['紧凑取景'], ['tight frame']],
+      ['宽松构图', 'loose framing', ['宽松取景'], ['loose frame']],
+      ['宽银幕画幅', 'widescreen aspect ratio', ['宽银幕'], ['widescreen']],
+      ['方形画幅', 'square format', ['正方形构图'], ['square aspect ratio']],
+      ['电影宽银幕', 'cinematic widescreen', ['电影宽画幅'], ['cinematic wide screen']],
+      ['移轴镜头', 'tilt-shift lens', ['移轴效果'], ['tilt shift']],
+      ['变形镜头', 'anamorphic lens', ['宽银幕镜头'], ['anamorphic']],
+      ['长焦压缩', 'telephoto compression', ['长焦压缩感'], ['compressed perspective']],
+      ['广角透视', 'wide-angle perspective', ['广角视角'], ['wide angle perspective']]
+    ],
+
+    style: [
+      ['商业摄影', 'commercial photography', ['商业摄影风'], ['commercial photo']],
+      ['产品摄影', 'product photography', ['产品拍摄'], ['product photo']],
+      ['美食摄影', 'food photography', ['食物摄影'], ['food photo']],
+      ['建筑摄影', 'architecture photography', ['建筑拍摄'], ['architectural photography']],
+      ['风景摄影', 'landscape photography', ['风光摄影'], ['landscape photo']],
+      ['夜景摄影', 'night photography', ['夜景拍摄'], ['night photo']],
+      ['婚礼摄影', 'wedding photography', ['婚纱摄影'], ['wedding photo']],
+      ['暗调摄影', 'low-key photography', ['暗调照片'], ['low key photography']],
+      ['高调摄影', 'high-key photography', ['高调照片'], ['high key photography']],
+      ['极简摄影', 'minimalist photography', ['极简摄影风'], ['minimal photography']],
+      ['复古胶片', 'retro film', ['复古胶卷'], ['vintage film']],
+      ['宝丽来', 'Polaroid', ['拍立得'], ['polaroid photo']],
+      ['135胶片', '135 film', ['135胶卷'], ['35mm film photography']],
+      ['120胶片', '120 film', ['120胶卷'], ['medium format film']],
+      ['中画幅', 'medium format', ['中画幅摄影'], ['medium-format']],
+      ['大画幅', 'large format', ['大画幅摄影'], ['large-format']],
+      ['电影海报', 'movie poster', ['电影海报风'], ['film poster']],
+      ['游戏原画', 'game concept art', ['游戏概念艺术'], ['game art']],
+      ['绘本插图', 'storybook illustration', ['绘本风'], ['children book illustration']],
+      ['漫画', 'comic art', ['漫画风'], ['comics']],
+      ['国漫', 'Chinese comic', ['中国漫画'], ['chinese comics']],
+      ['日漫', 'Japanese manga', ['日本漫画'], ['manga style']],
+      ['美漫', 'American comic', ['美国漫画'], ['american comics']],
+      ['厚涂', 'impasto', ['厚涂画风'], ['thick paint']],
+      ['平涂', 'flat color', ['平涂风格'], ['flat colors']],
+      ['赛璐璐', 'cel shading', ['赛璐璐风格'], ['cel shaded']],
+      ['吉卜力风', 'Studio Ghibli style', ['吉卜力风格'], ['ghibli style']],
+      ['新海诚风', 'Makoto Shinkai style', ['新海诚风格'], ['shinkai style']],
+      ['中国风', 'Chinese style', ['中式风格'], ['chinoiserie']],
+      ['国潮', 'Chinese trendy style', ['国潮风'], ['guochao']],
+      ['韩系风格', 'Korean style', ['韩风'], ['korean aesthetic']],
+      ['北欧风', 'Scandinavian style', ['北欧风格'], ['scandinavian design']],
+      ['蒸汽波', 'vaporwave', ['蒸汽波风格'], ['vapor wave']],
+      ['合成器浪潮', 'synthwave', ['合成波'], ['synth wave']],
+      ['复古未来主义', 'retrofuturism', ['复古未来风'], ['retro futurism']],
+      ['废土风', 'wasteland style', ['废土风格'], ['post-apocalyptic style']],
+      ['哥特', 'Gothic', ['哥特风'], ['gothic style']],
+      ['洛可可', 'Rococo', ['洛可可风格'], ['rococo style']],
+      ['装饰艺术', 'Art Deco', ['装饰艺术风格'], ['art-deco']],
+      ['新艺术', 'Art Nouveau', ['新艺术风格'], ['art nouveau style']],
+      ['表现主义', 'expressionism', ['表现主义风格'], ['expressionist']],
+      ['野兽派', 'fauvism', ['野兽派风格'], ['fauvist']],
+      ['立体主义', 'cubism', ['立体主义风格'], ['cubist']],
+      ['抽象艺术', 'abstract art', ['抽象风'], ['abstract']],
+      ['波普艺术', 'pop art', ['波普风'], ['pop-art']],
+      ['故障艺术', 'glitch art', ['故障风'], ['glitch']],
+      ['光绘', 'light painting', ['光绘摄影'], ['light paint']],
+      ['双重曝光', 'double exposure', ['双重曝光效果'], ['double-exposure']],
+      ['长曝光', 'long exposure', ['慢门摄影'], ['long-exposure']],
+      ['高速摄影', 'high-speed photography', ['高速快门'], ['high speed photography']],
+      ['湿版摄影', 'wet plate photography', ['湿版法'], ['wet plate']],
+      ['蓝晒', 'cyanotype', ['蓝晒法'], ['cyanotype print']],
+      ['红外摄影', 'infrared photography', ['红外线摄影'], ['infrared photo']],
+      ['黑色电影', 'film noir', ['黑色电影风'], ['noir']],
+      ['霓虹黑色', 'neon noir', ['霓虹黑色电影'], ['neon-noir']],
+      ['太阳朋克', 'solarpunk', ['太阳能朋克'], ['solar punk']],
+      ['生物朋克', 'biopunk', ['生化朋克'], ['bio punk']],
+      ['丝网印刷', 'screen print', ['丝网印'], ['screenprinting']],
+      ['版画', 'printmaking', ['版画风'], ['print making']],
+      ['木刻', 'woodcut', ['木刻版画'], ['wood cut']],
+      ['剪纸', 'paper cut', ['剪纸艺术'], ['papercut']],
+      ['拼贴', 'collage', ['拼贴艺术'], ['collage art']],
+      ['蜡笔', 'crayon', ['蜡笔画'], ['crayon drawing']],
+      ['粉彩', 'pastel drawing', ['粉彩画'], ['pastel art']],
+      ['钢笔画', 'pen and ink', ['钢笔素描'], ['ink drawing']],
+      ['素描', 'pencil sketch', ['铅笔素描'], ['sketch']],
+      ['炭笔', 'charcoal drawing', ['炭笔画'], ['charcoal art']],
+      ['水粉', 'gouache', ['水粉画'], ['gouache painting']],
+      ['丙烯', 'acrylic painting', ['丙烯画'], ['acrylic art']],
+      ['壁画', 'mural', ['墙绘'], ['murals']],
+      ['涂鸦', 'graffiti', ['涂鸦艺术'], ['graffiti art']],
+      ['儿童插画', 'children\'s book illustration', ['童书插画'], ['kids illustration']]
+    ],
+
+    quality: [
+      ['8K', '8K', ['8k分辨率'], ['8k resolution']],
+      ['4K', '4K', ['4k分辨率'], ['4k resolution']],
+      ['超高清', 'ultra high definition', ['UHD'], ['ultra hd']],
+      ['完美构图', 'perfect composition', ['构图完美'], ['flawless composition']],
+      ['构图平衡', 'balanced composition', ['平衡构图'], ['balanced framing']],
+      ['色彩和谐', 'harmonious colors', ['和谐色彩'], ['harmonious color palette']],
+      ['精细纹理', 'fine textures', ['纹理精细'], ['detailed textures']],
+      ['真实材质', 'realistic materials', ['材质真实'], ['realistic material']],
+      ['光线自然', 'natural lighting', ['自然光线'], ['natural light']],
+      ['阴影自然', 'natural shadows', ['自然阴影'], ['soft natural shadows']],
+      ['体积感', 'three-dimensional feel', ['立体感'], ['3d feel']],
+      ['层次丰富', 'rich layers', ['丰富层次'], ['rich depth']],
+      ['高动态范围', 'high dynamic range', ['HDR'], ['hdr']],
+      ['低噪点', 'low noise', ['噪点低'], ['clean image']],
+      ['锐利细节', 'crisp details', ['细节锐利'], ['crisp detail']],
+      ['专业调色', 'professional color grading', ['专业色彩'], ['pro color grading']],
+      ['获奖作品', 'award-winning', ['获奖摄影'], ['award winning']],
+      ['杰作', 'masterpiece', ['大师作品'], ['masterpieces']],
+      ['顶级画质', 'top-tier quality', ['顶级质量'], ['top quality']],
+      ['丰富色彩', 'rich colors', ['色彩丰富'], ['rich color']],
+      ['极致细节', 'extreme detail', ['细节极致'], ['extreme details']],
+      ['真实感', 'sense of realism', ['写实感'], ['realistic feel']],
+      ['氛围感强', 'strong atmosphere', ['强氛围'], ['strong atmospheric mood']],
+      ['视觉冲击力', 'strong visual impact', ['视觉冲击'], ['visual impact']]
+    ],
+
+    negative: [
+      ['缺失手指', 'missing fingers', ['少手指', '手指缺失'], ['finger missing']],
+      ['手部模糊', 'blurry hands', ['模糊的手'], ['hands blurry']],
+      ['手部比例错误', 'bad hand proportions', ['手部比例不对'], ['wrong hand proportions']],
+      ['手臂错误', 'bad arms', ['手臂崩坏'], ['arm errors']],
+      ['腿部错误', 'bad legs', ['腿崩'], ['leg errors']],
+      ['脚部畸形', 'malformed feet', ['坏脚', '脚部崩坏'], ['bad feet', 'deformed feet']],
+      ['多余手臂', 'extra arms', ['多手臂'], ['additional arms']],
+      ['面部不对称', 'asymmetric face', ['脸不对称'], ['asymmetrical face']],
+      ['牙齿畸形', 'malformed teeth', ['牙齿崩坏', '坏牙'], ['bad teeth']],
+      ['双头', 'two heads', ['两个头'], ['double head']],
+      ['身体融合', 'body fusion', ['身体粘连'], ['fused bodies']],
+      ['多余眼睛', 'extra eyes', ['多眼睛'], ['additional eyes']],
+      ['低分辨率', 'low resolution', ['分辨率低'], ['low-res']],
+      ['像素化', 'pixelated', ['马赛克感'], ['pixelation']],
+      ['色偏', 'color cast', ['偏色'], ['color shift']],
+      ['曝光错误', 'bad exposure', ['错误曝光'], ['wrong exposure']],
+      ['光线错误', 'bad lighting', ['光照错误'], ['wrong lighting']],
+      ['网址', 'URL', ['网址文字'], ['url text']],
+      ['边框', 'frame border', ['画框边框'], ['border frame']],
+      ['拉伸', 'stretched', ['画面拉伸'], ['stretching']]
+    ],
+
+    pattern: [
+      ['条纹', 'striped', ['条纹图案'], ['stripes']],
+      ['格纹', 'plaid', ['格子', '格纹图案'], ['checkered']],
+      ['千鸟格', 'houndstooth', ['千鸟格纹'], ['houndstooth pattern']],
+      ['波点', 'polka dot', ['圆点', '波点图案'], ['polka dots']],
+      ['碎花', 'floral print', ['碎花图案', '小花'], ['floral pattern']],
+      ['豹纹', 'leopard print', ['豹纹图案'], ['leopard pattern']],
+      ['斑马纹', 'zebra print', ['斑马纹图案'], ['zebra pattern']],
+      ['蛇纹', 'snake print', ['蛇皮纹'], ['snakeskin']],
+      ['鳄鱼纹', 'crocodile texture', ['鳄鱼皮纹'], ['crocodile pattern']],
+      ['几何图案', 'geometric pattern', ['几何纹'], ['geometric print']],
+      ['民族风图案', 'ethnic pattern', ['民族纹样'], ['ethnic print']],
+      ['佩斯利花纹', 'paisley pattern', ['佩斯利纹'], ['paisley']],
+      ['迷彩', 'camouflage', ['迷彩图案'], ['camo']],
+      ['扎染', 'tie-dye', ['扎染图案'], ['tie dye']],
+      ['渐变', 'gradient', ['渐变色'], ['gradient color']],
+      ['纯色', 'solid color', ['纯色图案'], ['solid']],
+      ['亮片装饰', 'sequined', ['亮片图案'], ['sequin embellished']],
+      ['刺绣', 'embroidered', ['刺绣图案'], ['embroidery']],
+      ['镂空', 'cutout', ['镂空图案'], ['cut-out']],
+      ['荷叶边', 'ruffled', ['荷叶边装饰'], ['ruffles']],
+      ['蕾丝边', 'lace trim', ['蕾丝装饰'], ['lace detailing']],
+      ['棋盘格', 'checkerboard', ['棋盘格纹'], ['checkerboard pattern']],
+      ['动物纹', 'animal print', ['动物纹图案'], ['animal pattern']],
+      ['星空图案', 'starry pattern', ['星空纹'], ['starry print']],
+      ['波西米亚图案', 'bohemian pattern', ['波西米亚纹'], ['boho pattern']],
+      ['中国风图案', 'Chinese pattern', ['中式纹样'], ['chinese motif']],
+      ['涂鸦图案', 'graffiti pattern', ['涂鸦纹'], ['graffiti print']],
+      ['抽象图案', 'abstract pattern', ['抽象纹'], ['abstract print']]
+    ],
+
+    shoe: [
+      ['高跟鞋', 'high heels', ['高跟鞋子'], ['heels']],
+      ['细跟鞋', 'stiletto heels', ['细高跟'], ['stilettos']],
+      ['粗跟鞋', 'block heels', ['粗高跟'], ['block heel']],
+      ['运动鞋', 'sneakers', ['波鞋'], ['trainers']],
+      ['小白鞋', 'white sneakers', ['白色运动鞋'], ['white trainers']],
+      ['帆布鞋', 'canvas shoes', ['帆布运动鞋'], ['canvas sneakers']],
+      ['乐福鞋', 'loafers', ['便鞋'], ['loafer']],
+      ['牛津鞋', 'oxford shoes', ['牛津皮鞋'], ['oxfords']],
+      ['皮鞋', 'leather shoes', ['皮革鞋'], ['dress shoes']],
+      ['短靴', 'ankle boots', ['踝靴'], ['ankle boot']],
+      ['长靴', 'tall boots', ['高筒靴'], ['tall boot']],
+      ['过膝靴', 'over-the-knee boots', ['过膝长靴'], ['thigh high boots']],
+      ['马丁靴', 'combat boots', ['马丁鞋'], ['dr martens']],
+      ['雪地靴', 'snow boots', ['雪靴'], ['winter boots']],
+      ['凉鞋', 'sandals', ['凉拖鞋'], ['sandal']],
+      ['拖鞋', 'slippers', ['居家拖鞋'], ['slipper']],
+      ['雨靴', 'rain boots', ['雨鞋'], ['wellingtons']],
+      ['登山鞋', 'hiking boots', ['徒步鞋'], ['hiking shoes']],
+      ['舞鞋', 'dance shoes', ['舞蹈鞋'], ['dancing shoes']],
+      ['玛丽珍鞋', 'Mary Janes', ['玛丽珍'], ['mary jane shoes']]
+    ]
+  };
+
+  // 合并基础词条与第二轮人工扩充词条。
+  const ALL_GROUPS = Object.assign({}, GROUPS);
+  Object.keys(EXTRA_GROUPS).forEach(function (category) {
+    ALL_GROUPS[category] = (ALL_GROUPS[category] || []).concat(EXTRA_GROUPS[category]);
+  });
+
   const entries = [];
   let sourceRowCount = 0;
 
-  Object.keys(GROUPS).forEach(function (category) {
-    GROUPS[category].forEach(function (row, index) {
+  Object.keys(ALL_GROUPS).forEach(function (category) {
+    ALL_GROUPS[category].forEach(function (row, index) {
       sourceRowCount += 1;
       const zh = row[0];
       const en = row[1];
@@ -895,6 +1691,395 @@
         zhAliases: dedupe(zhAliases),
         enAliases: dedupe(enAliases)
       });
+    });
+  });
+
+  // ── 组合扩充 ────────────────────────────────────────────────
+  // 人工词条保证准确；在此之上按「颜色 × 服装 / 材质 × 服装 /
+  // 图案 × 服装 / 发色 × 发型 / 时间、天气 × 场景 / 光质 × 光型 /
+  // 焦距 × 景别」生成规范的常用组合，让词典达到数千条量级。
+  // 生成组合只使用已有的规范译法，不引入机器翻译。
+
+  const manualEntryCount = entries.length;
+  const categoryMap = Object.create(null);
+  const canonicalZhMap = Object.create(null);
+  const usedZh = Object.create(null);
+  const usedEn = Object.create(null);
+
+  entries.forEach(function (entry) {
+    if (!categoryMap[entry.category]) categoryMap[entry.category] = [];
+    categoryMap[entry.category].push(entry);
+    if (!canonicalZhMap[entry.zh]) canonicalZhMap[entry.zh] = entry;
+    entry.zhAliases.forEach(function (a) { usedZh[a.toLowerCase()] = true; });
+    entry.enAliases.forEach(function (a) { usedEn[a.toLowerCase()] = true; });
+  });
+
+  function canonical(category, zh) {
+    const list = categoryMap[category] || [];
+    for (let i = 0; i < list.length; i += 1) {
+      if (list[i].zh === zh) return list[i];
+    }
+    return null;
+  }
+
+  function many(category, list) {
+    return list.map(function (zh) { return canonical(category, zh); }).filter(Boolean);
+  }
+
+  let generatedCounter = 0;
+
+  function addGenerated(category, zh, en, altZh, altEn, generation) {
+    const zhKey = String(zh || '').trim();
+    const enKey = String(en || '').trim();
+    if (!zhKey || !enKey || usedZh[zhKey.toLowerCase()]) return false;
+
+    const zhAliases = [zhKey];
+    (altZh || []).forEach(function (alt) {
+      const key = String(alt || '').trim();
+      if (key && key !== zhKey && !usedZh[key.toLowerCase()]) {
+        usedZh[key.toLowerCase()] = true;
+        zhAliases.push(key);
+      }
+    });
+
+    const enAliases = [enKey];
+    (altEn || []).forEach(function (alt) {
+      const key = String(alt || '').trim();
+      if (key && key.toLowerCase() !== enKey.toLowerCase() && !usedEn[key.toLowerCase()]) {
+        usedEn[key.toLowerCase()] = true;
+        enAliases.push(key);
+      }
+    });
+
+    generatedCounter += 1;
+    const entry = {
+      id: 'gen-' + generatedCounter,
+      category: category,
+      slot: SLOT_OF_CATEGORY[category],
+      zh: zhKey,
+      en: enKey,
+      zhAliases: zhAliases,
+      enAliases: enAliases,
+      generated: true,
+      generation: generation || 'combination'
+    };
+    usedZh[zhKey.toLowerCase()] = true;
+    usedEn[enKey.toLowerCase()] = true;
+    entries.push(entry);
+    if (!categoryMap[category]) categoryMap[category] = [];
+    categoryMap[category].push(entry);
+    return true;
+  }
+
+  // 颜色 → 服装 / 鞋履 / 包帽
+  const COLOR_ZH = [
+    '黑色', '白色', '灰色', '深灰', '浅灰', '米色', '奶油色', '象牙白',
+    '棕色', '咖啡色', '卡其色', '驼色', '藏青', '蓝色', '天蓝', '深蓝',
+    '红色', '酒红', '正红', '深红', '粉色', '浅粉', '玫瑰粉', '灰粉色',
+    '紫色', '薰衣草紫', '绿色', '墨绿', '橄榄绿', '薄荷绿', '军绿',
+    '黄色', '芥末黄', '柠檬黄', '奶油黄', '橙色', '暖黄色', '珊瑚色',
+    '裸色', '香槟色', '孔雀蓝', '宝石蓝', '祖母绿', '墨蓝', '雾霾蓝',
+    '金色', '银色', '铜色',
+    '荧光绿', '荧光粉', '金属色', '珠光色', '双色'
+  ];
+  const GARMENT_ZH = [
+    '风衣', '大衣', '长款大衣', '呢子大衣', '派克大衣', '皮夹克', '牛仔外套',
+    '飞行员夹克', '羊羔毛外套', '西装', '西装套装', '衬衫', '法式衬衫',
+    '古巴领衬衫', '夏威夷衬衫', '牛仔衬衫', '短袖衬衫', 'T恤', '长袖T恤',
+    '印花T恤', '背心', '吊带背心', '针织衫', '高领毛衣', '开衫', '卫衣',
+    '马甲', '西装马甲', '针织背心', '连衣裙', '长裙', '短裙', '吊带裙',
+    '抹胸裙', '一字肩连衣裙', '泡泡袖连衣裙', '衬衫裙', '针织连衣裙',
+    '毛衣裙', '礼服', '婚纱', '旗袍', '汉服', '和服', '和风浴衣', '韩服',
+    '纱丽', '半身裙', '百褶裙', '百褶短裙', 'A字裙', '包臀裙', '伞裙',
+    '鱼尾裙', '工装裙', '皮裙', '牛仔裙', '牛仔裤', '阔腿牛仔裤',
+    '直筒牛仔裤', '紧身牛仔裤', '阔腿裤', '西装裤', '短裤', '紧身裤',
+    '工装裤', '背带裤', '连体裤', '背带裙', '运动服', '校服', 'JK制服',
+    '洛丽塔', '女仆装', '护士服', '空姐制服', '军装', '警服', '消防服',
+    '雨衣', '冲锋衣', '防晒服', '斗篷', '长袍', '盔甲', '奇幻盔甲',
+    '太空服', '防护服', '泳衣', '比基尼', '连体泳衣', '潜水服', '滑雪服',
+    '睡衣', '家居服', '围裙', '皮裤', '喇叭裤', '烟管裤', '哈伦裤',
+    '运动裤', '瑜伽裤', '工装短裤', '百慕大短裤', '骑行裤', '西装短裤',
+    '高腰裤', '低腰裤', '直筒裤', '背带短裤', '机车裤', '工装马甲',
+    '战术背心', 'Cosplay服装'
+  ];
+  const SHOE_ZH = [
+    '高跟鞋', '细跟鞋', '粗跟鞋', '运动鞋', '帆布鞋', '乐福鞋', '牛津鞋',
+    '皮鞋', '短靴', '长靴', '过膝靴', '马丁靴', '雪地靴', '凉鞋', '拖鞋',
+    '雨靴', '登山鞋', '舞鞋', '玛丽珍鞋'
+  ];
+  const BAG_HAT_ZH = [
+    '手提包', '单肩包', '斜挎包', '背包', '帆布包', '腰包', '公文包', '钱包',
+    '手拿包', '托特包', '水桶包', '链条包', '帽子', '贝雷帽', '棒球帽',
+    '针织帽', '草帽', '礼帽', '渔夫帽', '牛仔帽', '钟形帽', '头巾',
+    '珍珠项链', '项链', '耳环', '耳钉', '手链', '手表', '戒指', '腰带',
+    '围巾', '丝巾', '墨镜', '眼镜', '发带', '发夹', '发簪', '发绳',
+    '蝴蝶结', '皇冠', '面纱', '面具', '护目镜', '耳机'
+  ];
+
+  const colors = many('color', COLOR_ZH);
+  const garments = many('outfit', GARMENT_ZH);
+  const shoes = many('shoe', SHOE_ZH);
+  const bagsHats = many('accessory', BAG_HAT_ZH);
+
+  function colorAdjective(color) {
+    if (color.zh === '香槟色') return 'champagne-colored';
+    if (color.zh === '奶茶色') return 'milk-tea-colored';
+    if (color.zh === '亚麻色') return 'flaxen';
+    if (color.zh === '玫瑰金') return 'rose gold';
+    if (color.zh === '珠光色') return 'pearlescent';
+    if (color.zh === '金属色') return 'metallic';
+    if (color.zh === '双色') return 'two-tone';
+    return color.en;
+  }
+
+  colors.forEach(function (color) {
+    garments.forEach(function (garment) {
+      addGenerated(
+        'outfit',
+        color.zh + garment.zh,
+        colorAdjective(color) + ' ' + garment.en,
+        [color.zh + '的' + garment.zh],
+        [],
+        'color+outfit'
+      );
+    });
+    shoes.forEach(function (shoe) {
+      addGenerated(
+        'shoe',
+        color.zh + shoe.zh,
+        colorAdjective(color) + ' ' + shoe.en,
+        [color.zh + '的' + shoe.zh],
+        [],
+        'color+shoe'
+      );
+    });
+    bagsHats.forEach(function (item) {
+      addGenerated(
+        'accessory',
+        color.zh + item.zh,
+        colorAdjective(color) + ' ' + item.en,
+        [color.zh + '的' + item.zh],
+        [],
+        'color+accessory'
+      );
+    });
+  });
+
+  // 材质 → 服装
+  const MATERIALS = [
+    ['棉质', 'cotton'], ['亚麻', 'linen'], ['丝绸', 'silk'], ['缎面', 'satin'],
+    ['羊毛', 'wool'], ['羊绒', 'cashmere'], ['皮革', 'leather'], ['牛仔', 'denim'],
+    ['天鹅绒', 'velvet'], ['雪纺', 'chiffon'], ['蕾丝', 'lace'], ['针织', 'knit'],
+    ['粗花呢', 'tweed'], ['麂皮', 'suede'], ['尼龙', 'nylon'], ['灯芯绒', 'corduroy'],
+    ['欧根纱', 'organza'], ['薄纱', 'tulle'], ['网纱', 'mesh'], ['人造毛', 'faux fur']
+  ];
+  const MATERIAL_GARMENTS = GARMENT_ZH.slice(0, 70);
+  MATERIALS.forEach(function (mat) {
+    MATERIAL_GARMENTS.forEach(function (zh) {
+      const garment = canonical('outfit', zh);
+      if (!garment) return;
+      addGenerated(
+        'outfit',
+        mat[0] + garment.zh,
+        mat[1] + ' ' + garment.en,
+        [mat[0] + '的' + garment.zh],
+        [],
+        'material+outfit'
+      );
+    });
+  });
+
+  // 图案 → 服装
+  const patterns = many('pattern', [
+    '条纹', '格纹', '千鸟格', '波点', '碎花', '豹纹', '斑马纹', '蛇纹',
+    '几何图案', '民族风图案', '佩斯利花纹', '迷彩', '扎染', '蕾丝边',
+    '棋盘格', '动物纹', '星空图案', '波西米亚图案', '中国风图案',
+    '涂鸦图案', '抽象图案'
+  ]);
+  const PATTERN_GARMENTS = GARMENT_ZH.slice(0, 55);
+  patterns.forEach(function (pattern) {
+    PATTERN_GARMENTS.forEach(function (zh) {
+      const garment = canonical('outfit', zh);
+      if (!garment) return;
+      addGenerated(
+        'outfit',
+        pattern.zh + garment.zh,
+        pattern.en + ' ' + garment.en,
+        [pattern.zh + '图案的' + garment.zh],
+        [],
+        'pattern+outfit'
+      );
+    });
+  });
+
+  // 发色 → 发型
+  const HAIR_COLORS = [
+    ['黑色', 'black'], ['棕色', 'brown'], ['金色', 'blonde'],
+    ['铂金色', 'platinum blonde'], ['银色', 'silver'], ['灰色', 'gray'],
+    ['红色', 'red'], ['酒红', 'burgundy'], ['蓝色', 'blue'], ['粉色', 'pink'],
+    ['紫色', 'purple'], ['绿色', 'green'], ['亚麻色', 'flaxen'],
+    ['奶茶色', 'milk tea brown'], ['焦糖色', 'caramel'], ['巧克力色', 'chocolate'],
+    ['香槟色', 'champagne'], ['雾霾蓝', 'dusty blue'], ['玫瑰金', 'rose gold'],
+    ['深红', 'deep red']
+  ];
+  const HAIR_STYLES = many('hair', [
+    '短发', '长发', '中长发', '齐肩发', '波波头', '精灵短发', '马尾', '高马尾',
+    '低马尾', '双马尾', '麻花辫', '侧编发', '盘发', '丸子头', '凌乱丸子头',
+    '直发', '卷发', '波浪卷', '微卷', '公主切', '狼尾发型', '鲻鱼头',
+    '层次剪', '碎发', '大背头', '油头', '法式编发', '鱼骨辫', '荷兰辫',
+    '双丸子头', '双麻花辫', '八字刘海', '法式刘海', '眉上刘海', '短卷发',
+    '长卷发', '蓬松卷发', '复古卷发', '爆炸头', '脏辫', '低盘发', '半扎发',
+    '公主头', '中分', '侧分'
+  ]);
+  HAIR_COLORS.forEach(function (color) {
+    HAIR_STYLES.forEach(function (style) {
+      addGenerated(
+        'hair',
+        color[0] + style.zh,
+        color[1] + ' ' + style.en,
+        [color[0] + '的' + style.zh],
+        [],
+        'haircolor+hairstyle'
+      );
+    });
+  });
+
+  // 时间 / 天气 × 场景
+  const TIME_ZH = [
+    '清晨', '黎明', '日出', '上午', '中午', '午后', '黄金时刻', '蓝调时刻',
+    '黄昏', '日落', '傍晚', '夜晚', '深夜', '午夜', '春天', '夏天', '秋天',
+    '冬天', '雨季', '雪季'
+  ];
+  const SCENE_ZH = [
+    '街边', '城市街道', '老街道', '小巷', '咖啡馆', '餐厅', '酒吧', '图书馆',
+    '书店', '卧室', '客厅', '厨房', '办公室', '教室', '火车站', '地铁站',
+    '机场', '公园', '花园', '森林', '竹林', '海滩', '海边', '湖边', '河边',
+    '山谷', '山顶', '雪山', '草原', '花田', '薰衣草田', '乡村', '古镇',
+    '城堡', '宫殿', '寺庙', '教堂', '博物馆', '美术馆', '摄影棚', '舞台',
+    '桥', '码头', '港口', '灯塔', '摩天大楼', '天台', '广场', '商业街',
+    '步行街', '夜市', '便利店', '商场', '地铁车厢', '公交车内', '火车车厢',
+    '飞机舱', '游艇', '洞穴', '火山', '冰川', '瀑布', '溪流', '稻田',
+    '茶园', '葡萄园', '樱花林', '枫叶林', '沙漠公路', '海边悬崖', '海底',
+    '珊瑚礁', '星空', '银河', '浮空岛', '魔法森林', '废墟城市', '未来都市',
+    '赛博朋克街区', '蒸汽朋克城市', '和风庭院', '中式园林', '屋顶泳池',
+    '天台酒吧', '咖啡馆露台', '森林木屋', '灯塔海岸'
+  ];
+  const scenes = many('scene', SCENE_ZH);
+  const times = many('time', TIME_ZH);
+
+  function timePhrase(en) {
+    if (/^(golden hour|blue hour|sunrise|sunset)$/i.test(en)) return 'during ' + en;
+    if (/^(early morning|morning|afternoon|early afternoon|spring|summer|autumn|winter|late spring|midsummer|late autumn|deep winter|rainy season|snowy season|holiday)$/i.test(en)) {
+      return 'in the ' + en;
+    }
+    return 'at ' + en;
+  }
+
+  times.forEach(function (time) {
+    scenes.forEach(function (scene) {
+      addGenerated(
+        'scene',
+        time.zh + '的' + scene.zh,
+        scene.en + ' ' + timePhrase(time.en),
+        [time.zh + scene.zh],
+        [],
+        'time+scene'
+      );
+    });
+  });
+
+  const WEATHER_MODS = [
+    ['晴天', 'sunny'], ['多云', 'cloudy'], ['阴天', 'overcast'], ['下雨', 'rainy'],
+    ['小雨', 'drizzly'], ['暴雨', 'stormy'], ['下雪', 'snowy'], ['雾', 'foggy'],
+    ['薄雾', 'misty'], ['刮风', 'windy'], ['暴风雨', 'stormy'], ['雷雨', 'stormy'],
+    ['阵雨', 'showery'], ['沙尘', 'dusty'], ['潮湿', 'humid'], ['闷热', 'muggy'],
+    ['雪后', 'snow-covered'], ['雨后', 'wet'], ['彩虹', 'rainbow'], ['冰雹', 'hail'],
+    ['台风', 'stormy']
+  ];
+  const WEATHER_SCENE_ZH = [
+    '街边', '城市街道', '老街道', '小巷', '公园', '花园', '森林', '竹林',
+    '海滩', '海边', '湖边', '河边', '山谷', '山顶', '雪山', '草原', '花田',
+    '薰衣草田', '乡村', '古镇', '城堡', '寺庙', '教堂', '桥', '码头', '港口',
+    '灯塔', '摩天大楼', '天台', '广场', '商业街', '步行街', '夜市', '游艇',
+    '洞穴', '火山', '冰川', '瀑布', '溪流', '稻田', '茶园', '葡萄园',
+    '樱花林', '枫叶林', '沙漠公路', '海边悬崖', '浮空岛', '魔法森林',
+    '废墟城市', '未来都市', '赛博朋克街区', '蒸汽朋克城市', '和风庭院',
+    '中式园林', '屋顶泳池', '天台酒吧', '咖啡馆露台', '森林木屋', '灯塔海岸'
+  ];
+  const weatherScenes = many('scene', WEATHER_SCENE_ZH);
+  const COLD_SCENES = { '雪山': true, '冰川': true, '极光': true };
+  const DRY_SCENES = { '沙漠公路': true, '火山': true, '洞穴': true };
+  const PEACEFUL_SCENES = {
+    '花园': true, '和风庭院': true, '中式园林': true, '葡萄园': true,
+    '茶园': true, '咖啡馆露台': true, '屋顶泳池': true, '天台酒吧': true
+  };
+  WEATHER_MODS.forEach(function (weather) {
+    weatherScenes.forEach(function (scene) {
+      if ((weather[0] === '闷热' || weather[0] === '潮湿') && (COLD_SCENES[scene.zh] || DRY_SCENES[scene.zh])) return;
+      if (/暴风雨|台风|雷雨/.test(weather[0]) && PEACEFUL_SCENES[scene.zh]) return;
+      if (/冰雹|彩虹/.test(weather[0]) && (scene.zh === '海底' || scene.zh === '珊瑚礁')) return;
+      const en = weather[1] === 'rainbow'
+        ? scene.en + ' with a rainbow'
+        : weather[1] === 'hail'
+          ? scene.en + ' with hail'
+          : weather[1] + ' ' + scene.en;
+      addGenerated(
+        'scene',
+        weather[0] + '的' + scene.zh,
+        en,
+        [weather[0] + scene.zh],
+        [],
+        'weather+scene'
+      );
+    });
+  });
+
+  // 光质 × 光型
+  const LIGHT_MODIFIERS = [
+    ['柔和', 'soft'], ['温暖', 'warm'], ['冷色', 'cool'], ['金色', 'golden'],
+    ['蓝色', 'blue'], ['红色', 'red'], ['紫色', 'purple'], ['绿色', 'green'],
+    ['明亮', 'bright'], ['昏暗', 'dim'], ['高对比', 'high-contrast'],
+    ['低对比', 'low-contrast']
+  ];
+  const LIGHT_TYPES = many('light', [
+    '自然光', '窗光', '逆光', '侧光', '顶光', '轮廓光', '月光', '烛光',
+    '星光', '火光', '霓虹光', '影棚光', '电影光', '戏剧性光', '斑驳光影',
+    '丁达尔光', '体积光', '镜头光晕', '路灯光', '环境光', '阳光', '晨光',
+    '聚光灯', '舞台光', '蝴蝶光', '伦勃朗光', '环形光', '分割光',
+    '漫射光', '直射光'
+  ]);
+  LIGHT_MODIFIERS.forEach(function (mod) {
+    LIGHT_TYPES.forEach(function (light) {
+      if (mod[0] === '柔和' && /直射光/.test(light.zh)) return;
+      if (mod[0] === '昏暗' && /阳光|晨光|直射光|自然光|聚光灯/.test(light.zh)) return;
+      if (mod[0] === '低对比' && /直射光/.test(light.zh)) return;
+      if (mod[0] === '高对比' && /柔光|漫射光/.test(light.zh)) return;
+      if (mod[0] === '冷色' && /烛光|火光/.test(light.zh)) return;
+      if (mod[0] === '温暖' && /月光/.test(light.zh)) return;
+      addGenerated(
+        'light',
+        mod[0] + light.zh,
+        mod[1] + ' ' + light.en,
+        [mod[0] + '的' + light.zh],
+        [],
+        'light+light'
+      );
+    });
+  });
+
+  // 焦距 × 景别
+  const FOCALS = many('camera', ['24mm', '35mm', '50mm', '85mm', '135mm']);
+  const SHOTS = many('camera', ['特写', '大特写', '中景', '全身照', '半身照', '上半身', '远景', '中近景']);
+  FOCALS.forEach(function (focal) {
+    SHOTS.forEach(function (shot) {
+      addGenerated(
+        'camera',
+        focal.zh + shot.zh,
+        focal.en + ' ' + shot.en,
+        [],
+        [],
+        'focal+shot'
+      );
     });
   });
 
@@ -940,7 +2125,9 @@
       sourceRows: sourceRowCount,
       zhAliases: totalZhAliases,
       enAliases: totalEnAliases,
-      categories: Object.keys(GROUPS).length
+      categories: Object.keys(ALL_GROUPS).length,
+      manualEntries: manualEntryCount,
+      generatedEntries: entries.length - manualEntryCount
     }
   };
 })();

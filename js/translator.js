@@ -25,7 +25,8 @@
     '给', '对', '向', '朝', '往', '从', '到', '于', '为', '以', '之', '其',
     '此', '那', '这', '我', '你', '他', '她', '它', '他们', '她们', '人们',
     '着', '的', '个', '位', '件', '条', '双', '只', '把', '张', '座', '片',
-    '群', '套', '头', '身', '款', '种', '些', '很', '手里', '手中'
+    '群', '套', '头', '身', '款', '种', '些', '很', '手里', '手中',
+    '一杯', '两杯', '三杯', '几杯', '一口', '一杯杯'
   ].sort(function (a, b) { return b.length - a.length; });
 
   const EN_STOP = [
@@ -600,6 +601,16 @@
     const person = personComposition(matches, text);
     if (person) {
       return { en: person, matches: matches, unknown: unknown };
+    }
+
+    // 没有服装主体、只有光质 + 光型时，先按光线组合，避免被质量词吞掉。
+    const hasLight = matches.some(function (m) { return m.entry.category === 'light'; });
+    const hasClothing = matches.some(function (m) {
+      return m.entry.category === 'outfit' || m.entry.category === 'accessory';
+    });
+    if (hasLight && !hasClothing) {
+      const light = lightComposition(matches);
+      if (light) return { en: light, matches: matches, unknown: unknown };
     }
 
     const outfit = outfitComposition(matches);

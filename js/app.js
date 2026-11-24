@@ -74,6 +74,7 @@
     searchClear: document.getElementById('searchClear'),
     searchResults: document.getElementById('searchResults'),
     saveFavoriteBtn: document.getElementById('saveFavoriteBtn'),
+    saveFavoriteBtnOutput: document.getElementById('saveFavoriteBtnOutput'),
     favoritesBtn: document.getElementById('favoritesBtn'),
     historyBtn: document.getElementById('historyBtn'),
     favoriteCount: document.getElementById('favoriteCount'),
@@ -512,6 +513,7 @@
     refreshAllCompletionUI();
     showWarning([]);
     hideOutput();
+    el.searchResults.hidden = true;
     closeAllModals();
     setStatus('已打开「' + (record.title || '未命名') + '」，正在按当前内容重新生成…', false);
     generate();
@@ -571,6 +573,7 @@
 
   function openLibrary(tab) {
     state.libraryTab = tab;
+    el.searchResults.hidden = true;
     renderLibrary();
     openModal(el.libraryModal);
   }
@@ -623,6 +626,7 @@
   }
 
   function openPreview() {
+    el.searchResults.hidden = true;
     if (!state.generated || !renderPreview()) {
       showToast('先生成一次提示词，再预览完整对照');
       return;
@@ -986,9 +990,9 @@
     el.negativeZh.textContent = negative.negativeZh;
     el.outputMeta.textContent =
       assembled.phraseCount + ' 个正面短语 · ' + negative.items.length + ' 个负面词' +
-      (assembled.quality.length ? ' · 自动质量词 ' + assembled.quality.length + ' 个' : '');
+      (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '');
     el.outputFootnote.textContent = assembled.quality.length
-      ? '末尾质量词由算法克制补充：' + assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。'
+      ? '末尾质量词为算法补全：' + assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。'
       : '正面已包含常用质量词，未重复添加。';
 
     el.outputSection.hidden = false;
@@ -1106,6 +1110,7 @@
     el.generateBtn.addEventListener('click', generate);
     el.idea.addEventListener('input', updateIdeaCount);
     el.saveFavoriteBtn.addEventListener('click', saveFavorite);
+    el.saveFavoriteBtnOutput.addEventListener('click', saveFavorite);
     el.favoritesBtn.addEventListener('click', function () { openLibrary('favorites'); });
     el.historyBtn.addEventListener('click', function () { openLibrary('history'); });
     el.previewBtn.addEventListener('click', openPreview);
@@ -1182,6 +1187,23 @@
     });
 
     document.addEventListener('keydown', function (event) {
+      const openModalEl = document.querySelector('.modal:not([hidden])');
+      if (openModalEl && event.key === 'Tab') {
+        const focusables = Array.prototype.slice.call(
+          openModalEl.querySelectorAll('a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])')
+        ).filter(function (node) { return node.offsetParent !== null || node === document.activeElement; });
+        if (focusables.length) {
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      }
       if (event.key === 'Escape') {
         const open = document.querySelector('.modal:not([hidden])');
         if (open) {
@@ -1194,8 +1216,8 @@
           return;
         }
       }
-      // 键盘快捷键：Ctrl/Cmd + Enter 生成。
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      // 键盘快捷键：Ctrl/Cmd + Enter 生成（弹层打开时不触发）。
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !document.querySelector('.modal:not([hidden])')) {
         event.preventDefault();
         generate();
       }
@@ -1216,7 +1238,9 @@
     updateLibraryCounts();
     if (window.T2I.Lexicon && window.T2I.Lexicon.stats) {
       const stats = window.T2I.Lexicon.stats;
-      el.outputFootnote.textContent = '词典已载入：' + stats.canonicalEntries + ' 条规范词条、' + stats.zhAliases + ' 个中文说法。';
+      const count = stats.canonicalEntries.toLocaleString('zh-CN');
+      el.searchInput.placeholder = '搜索 ' + count + ' 条词库、已填框、收藏和历史…';
+      el.outputFootnote.textContent = '词典已载入：' + count + ' 条规范词条、' + stats.zhAliases.toLocaleString('zh-CN') + ' 个中文说法。';
     }
   }
 

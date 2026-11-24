@@ -42,9 +42,12 @@ function pipeline(text) {
 }
 
 test('词典规模足够', function () {
-  assert.ok(T.Lexicon.stats.canonicalEntries >= 700);
-  assert.ok(T.Lexicon.stats.zhAliases >= 1800);
-  assert.ok(T.Lexicon.stats.enAliases >= 1700);
+  assert.ok(T.Lexicon.stats.canonicalEntries >= 15000);
+  assert.ok(T.Lexicon.stats.manualEntries >= 1400);
+  assert.ok(T.Lexicon.stats.generatedEntries >= 15000);
+  assert.ok(T.Lexicon.stats.zhAliases >= 30000);
+  assert.ok(T.Lexicon.stats.enAliases >= 18000);
+  assert.ok(T.Lexicon.stats.categories >= 22);
 });
 
 test('中文短语按语境翻译', function () {
@@ -58,7 +61,7 @@ test('英文反向翻译自然且可对照', function () {
   assert.strictEqual(TR.translateEn('beige trench coat').zh, '米色风衣');
   assert.strictEqual(TR.translateEn('soft natural light').zh, '柔和自然光');
   assert.strictEqual(TR.translateEn('woman with long hair and blue eyes').zh, '长发、蓝色眼睛的女人');
-  assert.strictEqual(TR.translateEn('street at dusk').zh, '黄昏街边');
+  assert.strictEqual(TR.translateEn('street at dusk').zh, '黄昏的街边');
 });
 
 test('示例想法拆进六个框', function () {
@@ -129,6 +132,7 @@ test('组装顺序和用户修改生效', function () {
 
 test('负面提示词覆盖常见问题并能避让冲突', function () {
   const normal = Negative.build('woman, cinematic lighting');
+  assert.ok(normal.items.length >= 55);
   assert.ok(normal.negativeEn.includes('watermark'));
   assert.ok(normal.negativeEn.includes('extra fingers'));
   assert.ok(normal.negativeZh.includes('水印'));
@@ -139,6 +143,18 @@ test('负面提示词覆盖常见问题并能避让冲突', function () {
   assert.ok(skipped.includes('噪点'));
   assert.ok(skipped.includes('裁切不当'));
   assert.ok(skipped.includes('过饱和'));
+});
+
+test('复杂服装、材质、发型、光效、镜头和场景都能命中', function () {
+  const text = '清晨的咖啡馆，穿黑色丝绸衬衫的银发女人坐在窗边，手里拿着一杯拿铁，柔和逆光，35mm特写，电影感';
+  const result = pipeline(text);
+  assert.deepStrictEqual(result.parsed.unknown, []);
+  assert.ok(result.slots.person.en.includes('silver hair'));
+  assert.ok(result.slots.person.en.includes('black silk shirt'));
+  assert.ok(result.slots.scene.en.includes('cafe in the early morning'));
+  assert.ok(result.slots.light.en.includes('soft backlight'));
+  assert.ok(result.slots.light.en.includes('35mm close-up'));
+  assert.ok(result.slots.style.en.includes('cinematic'));
 });
 
 test('重复片段不会重复组装', function () {

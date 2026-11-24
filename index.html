@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的中英对照提示词。">
+  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，支持词库搜索、收藏、历史和中英对照预览，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的提示词。">
   <title>大肥鱼 · 文生图提示词工坊</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -116,6 +116,7 @@
         </div>
         <div class="output-head-actions">
           <div class="output-meta" id="outputMeta"></div>
+          <button type="button" class="button button-outline" id="saveFavoriteBtnOutput">☆ 收藏当前</button>
           <button type="button" class="button button-outline" id="previewBtn">预览完整对照</button>
         </div>
       </div>
@@ -211,7 +212,7 @@
           </div>
         </article>
       </div>
-      <p class="preview-footnote">提示词使用当前六个框的英文内容；质量词由算法克制补充。</p>
+      <p class="preview-footnote">预览为最近一次生成结果；末尾质量词为算法补全。</p>
     </section>
   </div>
 

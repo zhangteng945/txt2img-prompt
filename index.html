@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3eee2">
+  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的中英对照提示词。">
+  <title>大肥鱼 · 文生图提示词工坊</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="返回页面顶部">
+      <span class="brand-mark" aria-hidden="true">鱼</span>
+      <span class="brand-text">
+        <strong>大肥鱼</strong>
+        <small>文生图提示词工坊</small>
+      </span>
+    </a>
+    <div class="header-badges" aria-label="产品特性">
+      <span>纯本地</span>
+      <span>零 API</span>
+      <span>手机可用</span>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">中文想法 → SDXL / ComfyUI 英文提示词</p>
+        <h1 id="hero-title">把一句想法，<br><em>拆成能生图的提示词。</em></h1>
+        <p class="lede">用词典、规则和模板拆解人物、服装、姿态、场景、光线与画风。六个框都能中英对照修改，算法补上的内容会明确标出。</p>
+      </div>
+
+      <div class="idea-card">
+        <div class="idea-card-head">
+          <label for="idea">整体想法</label>
+          <span class="microcopy">中文为主，可夹英文</span>
+        </div>
+        <textarea id="idea" rows="5" maxlength="1600" placeholder="例如：傍晚街边，短发女人穿米色风衣站着，侧脸看向远处，柔和自然光，电影感" spellcheck="false"></textarea>
+        <div class="idea-meta">
+          <span id="ideaCount">0 / 1600</span>
+          <span>内容只留在本机，不会上传</span>
+        </div>
+
+        <div class="examples" aria-label="示例想法">
+          <span class="examples-label">试试</span>
+          <button type="button" class="example-chip" data-example="0">傍晚街边</button>
+          <button type="button" class="example-chip" data-example="1">雨夜霓虹</button>
+          <button type="button" class="example-chip" data-example="2">清晨咖啡馆</button>
+          <button type="button" class="example-chip" data-example="3">奇幻雪山</button>
+        </div>
+
+        <div class="hero-actions">
+          <button type="button" id="fillBtn" class="button button-primary">
+            <span class="button-icon" aria-hidden="true">↳</span>
+            补全并填入各框
+          </button>
+          <button type="button" id="resetBtn" class="button button-ghost">清空</button>
+        </div>
+        <p id="parseStatus" class="status-line" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="library-bar" aria-label="搜索、收藏与历史">
+      <div class="search-box">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <label class="sr-only" for="searchInput">搜索词库、已填框内容、收藏和历史</label>
+        <input id="searchInput" type="search" placeholder="搜索词库、已填框、收藏和历史…" autocomplete="off" spellcheck="false">
+        <button type="button" id="searchClear" class="search-clear" hidden>清除</button>
+      </div>
+      <div class="library-actions">
+        <button type="button" id="saveFavoriteBtn" class="library-button library-button-accent"><span aria-hidden="true">☆</span> 收藏当前</button>
+        <button type="button" id="favoritesBtn" class="library-button"><span aria-hidden="true">▤</span> 收藏夹 <span class="count-pill" id="favoriteCount">0</span></button>
+        <button type="button" id="historyBtn" class="library-button"><span aria-hidden="true">↺</span> 历史 <span class="count-pill" id="historyCount">0</span></button>
+      </div>
+      <div id="searchResults" class="search-results" hidden aria-live="polite"></div>
+    </section>
+
+    <section class="workflow" aria-labelledby="workflow-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">第二步 · 校对</p>
+          <h2 id="workflow-title">六个框，中英对照</h2>
+        </div>
+        <p class="section-note">改中文或英文都可以：能对上词典时自动同步另一侧，对不上的原文会保留。</p>
+      </div>
+
+      <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
+        <span class="warning-icon" aria-hidden="true">!</span>
+        <div>
+          <strong>有未收录内容</strong>
+          <p id="warningText"></p>
+        </div>
+      </div>
+
+      <div id="slotGrid" class="slot-grid"><!-- app.js 渲染六个框 --></div>
+    </section>
+
+    <section class="generate-zone" aria-labelledby="generate-title">
+      <div class="generate-copy">
+        <p class="eyebrow">第三步 · 组装</p>
+        <h2 id="generate-title">生成最终提示词</h2>
+        <p>使用当前六个框里的英文；未改动的中文会先按词典补成英文。顺序为：主体 → 服装 → 姿态 → 场景 → 光线镜头 → 画风 → 少量质量词。</p>
+      </div>
+      <button type="button" id="generateBtn" class="button button-dark button-large">生成提示词 <span aria-hidden="true">→</span></button>
+    </section>
+
+    <section id="outputSection" class="output-section" aria-labelledby="output-title" hidden>
+      <div class="section-heading output-heading">
+        <div>
+          <p class="eyebrow">可直接粘贴</p>
+          <h2 id="output-title">最终输出</h2>
+        </div>
+        <div class="output-head-actions">
+          <div class="output-meta" id="outputMeta"></div>
+          <button type="button" class="button button-outline" id="previewBtn">预览完整对照</button>
+        </div>
+      </div>
+
+      <article class="output-card positive-card">
+        <header class="output-card-head">
+          <div>
+            <span class="output-kicker">Positive prompt</span>
+            <h3>正面提示词</h3>
+          </div>
+          <button type="button" class="copy-button" data-copy="positive">
+            <span class="copy-icon" aria-hidden="true">⧉</span>
+            <span class="copy-label">复制英文</span>
+          </button>
+        </header>
+        <textarea id="positiveEn" class="prompt-output" rows="7" readonly spellcheck="false"></textarea>
+        <div class="translation-block">
+          <div class="translation-head">
+            <span>中文对照</span>
+            <span class="translation-note">按框顺序排列，便于检查</span>
+          </div>
+          <p id="positiveZh" class="translation-text"></p>
+        </div>
+      </article>
+
+      <article class="output-card negative-card">
+        <header class="output-card-head">
+          <div>
+            <span class="output-kicker">Negative prompt</span>
+            <h3>负面提示词</h3>
+          </div>
+          <button type="button" class="copy-button" data-copy="negative">
+            <span class="copy-icon" aria-hidden="true">⧉</span>
+            <span class="copy-label">复制英文</span>
+          </button>
+        </header>
+        <textarea id="negativeEn" class="prompt-output" rows="6" readonly spellcheck="false"></textarea>
+        <div class="translation-block">
+          <div class="translation-head">
+            <span>中文对照</span>
+            <span class="translation-note">已按正面内容自动避让冲突</span>
+          </div>
+          <p id="negativeZh" class="translation-text"></p>
+        </div>
+      </article>
+
+      <p class="output-footnote" id="outputFootnote"></p>
+    </section>
+
+    <footer class="site-footer">
+      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板，不调用大模型，不收集数据。</p>
+      <p>兼容 Lustify Endgame（SDXL）与 ComfyUI。提示词可继续按你的模型习惯微调。</p>
+    </footer>
+  </main>
+
+  <div id="previewModal" class="modal" hidden>
+    <div class="modal-overlay" data-close-modal></div>
+    <section class="modal-panel preview-panel" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">完整中英对照</p>
+          <h2 id="previewTitle">生成结果预览</h2>
+        </div>
+        <button type="button" class="modal-close" data-close-modal aria-label="关闭预览">×</button>
+      </header>
+      <div class="modal-body preview-body">
+        <article class="preview-card">
+          <div class="preview-card-head">
+            <h3>正面提示词</h3>
+            <button type="button" class="copy-button" data-copy="positive">
+              <span class="copy-icon" aria-hidden="true">⧉</span>
+              <span class="copy-label">复制英文</span>
+            </button>
+          </div>
+          <pre id="previewPositiveEn" class="preview-code"></pre>
+          <div class="preview-translation">
+            <h4>中文对照</h4>
+            <p id="previewPositiveZh"></p>
+          </div>
+        </article>
+        <article class="preview-card">
+          <div class="preview-card-head">
+            <h3>负面提示词</h3>
+            <button type="button" class="copy-button" data-copy="negative">
+              <span class="copy-icon" aria-hidden="true">⧉</span>
+              <span class="copy-label">复制英文</span>
+            </button>
+          </div>
+          <pre id="previewNegativeEn" class="preview-code"></pre>
+          <div class="preview-translation">
+            <h4>中文对照</h4>
+            <p id="previewNegativeZh"></p>
+          </div>
+        </article>
+      </div>
+      <p class="preview-footnote">提示词使用当前六个框的英文内容；质量词由算法克制补充。</p>
+    </section>
+  </div>
+
+  <div id="libraryModal" class="modal" hidden>
+    <div class="modal-overlay" data-close-modal></div>
+    <section class="modal-panel library-panel" role="dialog" aria-modal="true" aria-labelledby="libraryTitle">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">保存在本机浏览器</p>
+          <h2 id="libraryTitle">收藏与历史</h2>
+        </div>
+        <button type="button" class="modal-close" data-close-modal aria-label="关闭收藏与历史">×</button>
+      </header>
+      <div class="modal-tabs" role="tablist" aria-label="收藏或历史">
+        <button type="button" class="modal-tab is-active" id="favoritesTab" role="tab" aria-selected="true" data-library-tab="favorites">收藏夹</button>
+        <button type="button" class="modal-tab" id="historyTab" role="tab" aria-selected="false" data-library-tab="history">历史记录</button>
+      </div>
+      <div class="modal-body" id="libraryBody"></div>
+      <p class="storage-note" id="storageNote"></p>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
+  </noscript>
+
+  <script src="js/utils.js"></script>
+  <script src="js/lexicon.js"></script>
+  <script src="js/translator.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/slot-fill.js"></script>
+  <script src="js/complete.js"></script>
+  <script src="js/assemble.js"></script>
+  <script src="js/negative.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

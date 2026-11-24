@@ -15,6 +15,7 @@
   const Complete = T2I.Complete;
   const Assemble = T2I.Assemble;
   const Negative = T2I.Negative;
+  const Feedback = T2I.Feedback;
 
   const STORAGE_KEYS = {
     favorites: 't2i.favorites.v1',
@@ -46,6 +47,7 @@
     composing: Object.create(null),
     favorites: [],
     history: [],
+    feedback: [],
     libraryTab: 'favorites',
     storageOK: true,
     toastTimer: null,
@@ -79,6 +81,17 @@
     historyBtn: document.getElementById('historyBtn'),
     favoriteCount: document.getElementById('favoriteCount'),
     historyCount: document.getElementById('historyCount'),
+    feedbackBtn: document.getElementById('feedbackBtn'),
+    feedbackCount: document.getElementById('feedbackCount'),
+    warningFeedbackBtn: document.getElementById('warningFeedbackBtn'),
+    feedbackModal: document.getElementById('feedbackModal'),
+    feedbackList: document.getElementById('feedbackList'),
+    feedbackSummary: document.getElementById('feedbackSummary'),
+    feedbackStorageNote: document.getElementById('feedbackStorageNote'),
+    copyFeedbackBtn: document.getElementById('copyFeedbackBtn'),
+    downloadFeedbackBtn: document.getElementById('downloadFeedbackBtn'),
+    issueFeedbackBtn: document.getElementById('issueFeedbackBtn'),
+    clearFeedbackBtn: document.getElementById('clearFeedbackBtn'),
     previewBtn: document.getElementById('previewBtn'),
     previewModal: document.getElementById('previewModal'),
     previewPositiveEn: document.getElementById('previewPositiveEn'),
@@ -328,7 +341,8 @@
     }
     el.warningBanner.hidden = false;
     el.warningText.textContent =
-      '未收录：' + unknown.join('、') + '。这些原文已保留在英文框里，没有被清空；你可以直接改英文，或换一种说法。';
+      '未收录：' + unknown.join('、') + '。这些原文已保留在英文框里，没有被清空，也已自动记入本机「待补录」，不用再手抄。' +
+      '你可以直接改英文，或点「查看待补录」写备注并导出给大肥鱼补词。';
   }
 
   function updateWarningFromState() {
@@ -446,6 +460,224 @@
     const okHistory = saveStore(STORAGE_KEYS.history, state.history);
     if (!okFavorites || !okHistory) state.storageOK = false;
     updateLibraryCounts();
+  }
+
+  function updateFeedbackCount() {
+    if (el.feedbackCount) el.feedbackCount.textContent = String(state.feedback.length);
+  }
+
+  function persistFeedback() {
+    let ok = false;
+    try {
+      ok = Feedback.saveTo(window.localStorage, state.feedback);
+    } catch (err) {
+      ok = false;
+    }
+    if (!ok) state.storageOK = false;
+    updateFeedbackCount();
+    return ok;
+  }
+
+  // 打开弹层前按当前词库重新判断：新冻结版发布后，已经能命中的词会被标出来。
+  function feedbackCovered(term) {
+    return Feedback.isCovered(term, TR);
+  }
+
+  function collectFeedback(ideaText) {
+    const map = state.unknownBySlot;
+    if (!Feedback.occurrencesFromUnknownMap(map).length) return;
+    const fallbackIdea = SF.slots.map(function (key) {
+      return state.slots[key].zh || state.slots[key].en || '';
+    }).filter(Boolean).join('，');
+    const contextIdea = String(ideaText || '').trim() || fallbackIdea;
+    if (!contextIdea) return;
+    state.feedback = Feedback.recordUnknownTerms(state.feedback, map, {
+      idea: contextIdea,
+      source: Feedback.sourceLabel(),
+      at: new Date().toISOString()
+    });
+    persistFeedback();
+  }
+
+  function recomputeUnknownBySlot() {
+    const map = Object.create(null);
+    SF.slots.forEach(function (key) {
+      const slot = state.slots[key];
+      const unknown = [];
+      if (slot.zh && slot.zh.trim()) {
+        const result = U.hasCjk(slot.zh)
+          ? TR.translateZh(slot.zh)
+          : (slot.en.trim() ? TR.translateEn(slot.en) : TR.translateZh(slot.zh));
+        (result.unknown || []).forEach(function (item) {
+          if (Feedback.isMeaningfulTerm(item) && !unknown.includes(item)) unknown.push(item);
+        });
+      } else if (slot.en && slot.en.trim()) {
+        const result = TR.translateEn(slot.en);
+        (result.unknown || []).forEach(function (item) {
+          if (Feedback.isMeaningfulTerm(item) && !unknown.includes(item)) unknown.push(item);
+        });
+      }
+      map[key] = unknown;
+    });
+    state.unknownBySlot = map;
+    return map;
+  }
+
+  function formatFeedbackTime(value) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function feedbackSlotText(entry) {
+    return (entry.slotHints || []).map(function (slot) {
+      return Feedback.slotLabels[slot] || slot;
+    }).join('、') || '未标注';
+  }
+
+  function renderFeedback() {
+    if (!el.feedbackList) return;
+    const rows = state.feedback.map(function (entry) {
+      return { entry: entry, covered: feedbackCovered(entry.term) };
+    });
+    const coveredCount = rows.filter(function (row) { return row.covered; }).length;
+    const totalCount = rows.reduce(function (sum, row) { return sum + row.entry.count; }, 0);
+
+    if (!rows.length) {
+      el.feedbackSummary.textContent = '还没有待补录词。遇到未收录内容时，页面会自动记在这里。';
+    } else {
+      el.feedbackSummary.textContent =
+        '共 ' + rows.length + ' 个待补录词，累计出现 ' + totalCount + ' 次' +
+        (coveredCount ? '；其中 ' + coveredCount + ' 个当前词库已可命中，可移除。' : '。');
+    }
+
+    const empty = rows.length === 0;
+    [el.copyFeedbackBtn, el.downloadFeedbackBtn, el.issueFeedbackBtn, el.clearFeedbackBtn].forEach(function (button) {
+      if (button) button.disabled = empty;
+    });
+
+    if (empty) {
+      el.feedbackList.innerHTML =
+        '<div class="feedback-empty"><strong>暂无待补录</strong>' +
+        '下次拆解想法或生成提示词时，未收录片段会自动记录，同一词只留一条并累计次数。</div>';
+    } else {
+      el.feedbackList.innerHTML = rows.map(function (row) {
+        const entry = row.entry;
+        const contexts = (entry.contexts || []).map(function (context) {
+          const where = context.slotLabel || Feedback.slotLabels[context.slot] || '未标注框';
+          return (
+            '<li>' +
+              '<span class="feedback-context-time">' + escapeHtml(formatFeedbackTime(context.at)) + ' · ' + escapeHtml(where) + '</span>' +
+              '<p class="feedback-context-text">' + escapeHtml(context.idea) + '</p>' +
+            '</li>'
+          );
+        }).join('');
+        return (
+          '<article class="feedback-card">' +
+            '<div class="feedback-card-head">' +
+              '<div class="feedback-card-main">' +
+                '<h3 class="feedback-term">' + escapeHtml(entry.term) + '</h3>' +
+                '<p class="feedback-meta">出现 ' + entry.count + ' 次 · 最近更新 ' + escapeHtml(formatFeedbackTime(entry.updatedAt)) + '</p>' +
+                (row.covered ? '<p class="feedback-covered">词库已可命中，可移除</p>' : '') +
+                '<p class="feedback-slots">可能所在框：' + escapeHtml(feedbackSlotText(entry)) + '</p>' +
+              '</div>' +
+              '<button type="button" class="record-action danger" data-remove-feedback="' + escapeHtml(entry.term) + '">删除</button>' +
+            '</div>' +
+            (contexts
+              ? '<div class="feedback-contexts"><h4>最近上下文（完整想法原文）</h4><ol>' + contexts + '</ol></div>'
+              : '<p class="feedback-slots">还没有保存到想法原文。</p>') +
+            '<label class="feedback-note-label">备注（大概是什么意思 / 想译成什么英文 / 属于哪一类）' +
+              '<textarea class="feedback-note" data-feedback-note="' + escapeHtml(entry.term) + '" rows="2" maxlength="' + Feedback.NOTE_MAX + '" placeholder="例如：大概是一种发光的蝴蝶 / 想译成 glowing butterfly / 属于场景元素">' +
+                escapeHtml(entry.note || '') +
+              '</textarea>' +
+            '</label>' +
+          '</article>'
+        );
+      }).join('');
+    }
+
+    el.feedbackStorageNote.textContent = state.storageOK
+      ? '待补录保存在本浏览器 localStorage（' + Feedback.STORAGE_KEY + '）；清理浏览器数据会丢失。导出 JSON 后即可交给大肥鱼。'
+      : '当前浏览器不允许本地存储或空间已满，待补录只在本次页面中有效；请尽快复制或下载清单。';
+  }
+
+  function openFeedback() {
+    el.searchResults.hidden = true;
+    renderFeedback();
+    openModal(el.feedbackModal);
+  }
+
+  function feedbackExportData() {
+    return Feedback.exportFeedback(state.feedback, {
+      now: new Date(),
+      source: Feedback.sourceLabel()
+    });
+  }
+
+  function copyFeedback() {
+    if (!state.feedback.length) {
+      showToast('还没有待补录词');
+      return;
+    }
+    const text = Feedback.markdownFor(feedbackExportData(), {
+      isCovered: feedbackCovered
+    });
+    copyText(text).then(function (ok) {
+      showToast(ok ? '已复制补录清单（Markdown + JSON）' : '复制失败，请用「下载 JSON」');
+    });
+  }
+
+  function downloadFeedback() {
+    if (!state.feedback.length) {
+      showToast('还没有待补录词');
+      return;
+    }
+    const data = feedbackExportData();
+    const blob = new Blob([Feedback.toJson(data)], { type: 'application/json;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = Feedback.filenameFor(new Date());
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(href); }, 1200);
+    showToast('已下载 ' + link.download);
+  }
+
+  function openGithubFeedback() {
+    if (!state.feedback.length) {
+      showToast('还没有待补录词');
+      return;
+    }
+    const url = Feedback.issueUrlFor(feedbackExportData(), {
+      isCovered: feedbackCovered
+    });
+    const opened = window.open(url, '_blank');
+    if (opened) {
+      try { opened.opener = null; } catch (err) { /* 忽略跨域限制 */ }
+    } else {
+      showToast('浏览器拦截了新标签页，请允许弹窗后再试');
+    }
+  }
+
+  function removeFeedbackTerm(term) {
+    state.feedback = Feedback.removeTerm(state.feedback, term);
+    persistFeedback();
+    renderFeedback();
+    showToast('已移除「' + term + '」');
+  }
+
+  function clearFeedback() {
+    if (!state.feedback.length) return;
+    if (window.confirm && !window.confirm('确定清空全部待补录词？清空后无法恢复。')) return;
+    state.feedback = [];
+    persistFeedback();
+    renderFeedback();
+    showToast('已清空待补录');
   }
 
   function saveFavorite() {
@@ -861,6 +1093,7 @@
 
     writeAllSlotsToDom();
     updateWarningFromState();
+    collectFeedback(idea);
     hideOutput();
 
     const counts = {};
@@ -973,6 +1206,7 @@
       state.slots[key].en = fields.en.value;
     });
 
+    recomputeUnknownBySlot();
     ensureEnglishForAllSlots();
     const assembled = Assemble.assemble(state.slots);
     if (!assembled.positiveEn.trim()) {
@@ -1003,6 +1237,7 @@
       autoSizePrompt(el.negativeEn);
     }, 60);
     updateWarningFromState();
+    collectFeedback(el.idea.value);
     if (assembled.hasUntranslated) {
       showToast('提示词里仍保留未收录中文，建议在英文框里改写');
     } else {
@@ -1113,7 +1348,13 @@
     el.saveFavoriteBtnOutput.addEventListener('click', saveFavorite);
     el.favoritesBtn.addEventListener('click', function () { openLibrary('favorites'); });
     el.historyBtn.addEventListener('click', function () { openLibrary('history'); });
+    el.feedbackBtn.addEventListener('click', openFeedback);
+    el.warningFeedbackBtn.addEventListener('click', openFeedback);
     el.previewBtn.addEventListener('click', openPreview);
+    el.copyFeedbackBtn.addEventListener('click', copyFeedback);
+    el.downloadFeedbackBtn.addEventListener('click', downloadFeedback);
+    el.issueFeedbackBtn.addEventListener('click', openGithubFeedback);
+    el.clearFeedbackBtn.addEventListener('click', clearFeedback);
 
     document.querySelectorAll('[data-example]').forEach(function (button) {
       button.addEventListener('click', function () {
@@ -1152,6 +1393,18 @@
     el.searchResults.addEventListener('click', function (event) {
       const action = event.target.closest('[data-search-action]');
       if (action) handleSearchAction(action);
+    });
+
+    el.feedbackList.addEventListener('click', function (event) {
+      const remove = event.target.closest('[data-remove-feedback]');
+      if (remove) removeFeedbackTerm(remove.getAttribute('data-remove-feedback'));
+    });
+
+    el.feedbackList.addEventListener('input', function (event) {
+      const area = event.target.closest('[data-feedback-note]');
+      if (!area) return;
+      state.feedback = Feedback.setNote(state.feedback, area.getAttribute('data-feedback-note'), area.value);
+      persistFeedback();
     });
 
     el.searchInput.addEventListener('input', function () {
@@ -1235,7 +1488,9 @@
     state.history = loadStore(STORAGE_KEYS.history).filter(function (item) {
       return item && item.id && item.slots;
     });
+    state.feedback = Feedback.normalizeList(loadStore(Feedback.STORAGE_KEY));
     updateLibraryCounts();
+    updateFeedbackCount();
     if (window.T2I.Lexicon && window.T2I.Lexicon.stats) {
       const stats = window.T2I.Lexicon.stats;
       const count = stats.canonicalEntries.toLocaleString('zh-CN');

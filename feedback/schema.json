@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhangteng945/txt2img-prompt/feedback/schema.json",
+  "title": "txt2img-prompt lexicon feedback",
+  "description": "页面「待补录」导出的词库反馈文件。给大肥鱼按正确类别补规范词和常用 alias。",
+  "type": "object",
+  "required": [
+    "schema",
+    "schemaUrl",
+    "generator",
+    "pageVersion",
+    "exportedAt",
+    "source",
+    "terms"
+  ],
+  "properties": {
+    "schema": {
+      "const": "t2i.lexicon-feedback/v1",
+      "description": "固定格式标识；不兼容变更才升版本。"
+    },
+    "schemaUrl": {
+      "const": "feedback/schema.json",
+      "description": "仓库内的 schema 相对路径。"
+    },
+    "generator": {
+      "const": "txt2img-prompt"
+    },
+    "pageVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "生成这份文件的页面版本。"
+    },
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "导出时间（ISO 8601）。"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "页面版本 + 当前词库规模，用于判断反馈对应哪一版词库。"
+    },
+    "terms": {
+      "type": "array",
+      "maxItems": 300,
+      "items": {
+        "$ref": "#/$defs/term"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "term": {
+      "type": "object",
+      "required": [
+        "term",
+        "count",
+        "contexts",
+        "slotHints",
+        "note",
+        "createdAt",
+        "updatedAt",
+        "source"
+      ],
+      "properties": {
+        "term": {
+          "type": "string",
+          "minLength": 1,
+          "description": "未收录片段原文；已去掉首尾空白和纯标点。"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "累计出现次数；每次拆解或生成命中一次加一。"
+        },
+        "contexts": {
+          "type": "array",
+          "maxItems": 5,
+          "description": "最近 5 条完整想法原文及可能所在框。",
+          "items": {
+            "$ref": "#/$defs/context"
+          }
+        },
+        "slotHints": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "这个词可能属于的六个框之一或几个。",
+          "items": {
+            "enum": [
+              "person",
+              "outfit",
+              "pose",
+              "scene",
+              "light",
+              "style"
+            ]
+          }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 600,
+          "description": "用户可选备注：大概意思 / 想译成的英文 / 所属类别。"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "记录该词时的页面版本 / 词库标识。"
+        }
+      },
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "required": [
+        "idea",
+        "slot",
+        "slotLabel",
+        "at"
+      ],
+      "properties": {
+        "idea": {
+          "type": "string",
+          "minLength": 1,
+          "description": "完整想法原文，不是截断摘要。"
+        },
+        "slot": {
+          "type": "string",
+          "description": "可能所在框的英文 key；无法判断时为空字符串。"
+        },
+        "slotLabel": {
+          "type": "string",
+          "description": "可能所在框的中文名；无法判断时为空字符串。"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

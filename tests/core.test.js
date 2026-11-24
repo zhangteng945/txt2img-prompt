@@ -5,11 +5,12 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const assert = require('assert');
 
 global.window = global;
 
-['utils', 'lexicon', 'translator', 'parser', 'slot-fill', 'complete', 'assemble', 'negative']
+['utils', 'lexicon', 'translator', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback']
   .forEach(function (name) {
     require(path.join(__dirname, '..', 'js', name + '.js'));
   });
@@ -21,6 +22,7 @@ const SF = T.SlotFill;
 const Complete = T.Complete;
 const Assemble = T.Assemble;
 const Negative = T.Negative;
+const Feedback = T.Feedback;
 
 let passed = 0;
 function test(name, fn) {
@@ -608,6 +610,170 @@ test('重复片段不会重复组装', function () {
   const assembled = Assemble.assemble(result.slots);
   const matches = assembled.positiveEn.match(/cinematic/g) || [];
   assert.strictEqual(matches.length, 1);
+});
+
+
+test('未收录待补录：过滤纯标点、同词去重、累计次数并保留最近上下文', function () {
+  const first = '2026-11-24T05:00:00.000Z';
+  let list = Feedback.recordUnknownTerms([], {
+    scene: ['量子蝴蝶', '，。', '   '],
+    style: ['量子蝴蝶']
+  }, {
+    idea: '一个女孩站在街边，背后有闪烁的量子蝴蝶',
+    source: 'txt2img-prompt@test / lexicon test',
+    at: first
+  }, first);
+
+  assert.strictEqual(list.length, 1, '纯标点、空白不能进入待补录');
+  assert.strictEqual(list[0].term, '量子蝴蝶');
+  assert.strictEqual(list[0].count, 1);
+  assert.deepStrictEqual(list[0].slotHints, ['scene', 'style']);
+  assert.strictEqual(list[0].contexts.length, 1);
+  assert.strictEqual(list[0].contexts[0].idea, '一个女孩站在街边，背后有闪烁的量子蝴蝶');
+  assert.strictEqual(list[0].contexts[0].slot, 'scene');
+  assert.strictEqual(list[0].contexts[0].slotLabel, '场景与背景');
+  assert.strictEqual(list[0].source, 'txt2img-prompt@test / lexicon test');
+
+  const second = '2026-11-24T05:10:00.000Z';
+  list = Feedback.recordUnknownTerms(list, {
+    scene: ['量子蝴蝶'],
+    pose: ['奇怪的装置']
+  }, {
+    idea: '量子蝴蝶停在奇怪的装置上',
+    source: 'txt2img-prompt@test / lexicon test',
+    at: second
+  }, second);
+
+  const butterfly = list.find(function (item) { return item.term === '量子蝴蝶'; });
+  assert.strictEqual(butterfly.count, 2, '同一词再次出现应累计次数');
+  assert.strictEqual(butterfly.contexts.length, 2, '上下文应追加');
+  assert.ok(butterfly.contexts[1].idea.indexOf('奇怪的装置') !== -1);
+
+  // 只保留最近 5 条上下文，且重复的同一想法 + 框只留最新一条。
+  let rolling = list;
+  for (let i = 0; i < 7; i += 1) {
+    const at = '2026-11-24T06:0' + i + ':00.000Z';
+    rolling = Feedback.recordUnknownTerms(rolling, { scene: ['量子蝴蝶'] }, {
+      idea: '第 ' + i + ' 条量子蝴蝶想法',
+      source: 'txt2img-prompt@test / lexicon test',
+      at: at
+    }, at);
+  }
+  const rolled = rolling.find(function (item) { return item.term === '量子蝴蝶'; });
+  assert.strictEqual(rolled.contexts.length, Feedback.MAX_CONTEXTS);
+  assert.strictEqual(rolled.contexts[rolled.contexts.length - 1].idea, '第 6 条量子蝴蝶想法');
+  assert.ok(!rolled.contexts.some(function (context) { return context.idea === '第 0 条量子蝴蝶想法'; }));
+});
+
+test('待补录导出符合固定 schema，字段齐全且文件名稳定', function () {
+  const list = Feedback.recordUnknownTerms([], {
+    scene: ['量子蝴蝶', '赛博朋克']
+  }, {
+    idea: '一个女孩站在街边，背后有量子蝴蝶和赛博朋克',
+    source: 'txt2img-prompt@test / lexicon test',
+    at: '2026-11-24T05:00:00.000Z'
+  }, '2026-11-24T05:00:00.000Z');
+  const data = Feedback.exportFeedback(list, {
+    now: new Date('2026-11-24T06:30:00.000Z'),
+    source: 'txt2img-prompt@test / lexicon test'
+  });
+
+  assert.strictEqual(data.schema, Feedback.SCHEMA_ID);
+  assert.strictEqual(data.schemaUrl, 'feedback/schema.json');
+  assert.strictEqual(data.generator, 'txt2img-prompt');
+  assert.strictEqual(data.pageVersion, Feedback.PAGE_VERSION);
+  assert.strictEqual(data.exportedAt, '2026-11-24T06:30:00.000Z');
+  assert.strictEqual(data.source, 'txt2img-prompt@test / lexicon test');
+  assert.strictEqual(data.terms.length, 2);
+
+  ['term', 'count', 'contexts', 'slotHints', 'note', 'createdAt', 'updatedAt', 'source'].forEach(function (field) {
+    assert.ok(Object.prototype.hasOwnProperty.call(data.terms[0], field), '导出词条缺少字段 ' + field);
+  });
+  assert.strictEqual(data.terms[0].contexts[0].idea, '一个女孩站在街边，背后有量子蝴蝶和赛博朋克');
+  assert.strictEqual(data.terms[0].contexts[0].slot, 'scene');
+  assert.ok(Array.isArray(data.terms[0].slotHints));
+  assert.strictEqual(Feedback.filenameFor(new Date('2026-11-24T06:30:00.000Z')), 'lexicon-feedback-20261124.json');
+  assert.deepStrictEqual(JSON.parse(Feedback.toJson(data)), data);
+
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'feedback', 'schema.json'), 'utf8'));
+  assert.strictEqual(schema.properties.schema.const, Feedback.SCHEMA_ID);
+  assert.deepStrictEqual(schema.required.sort(), ['exportedAt', 'generator', 'pageVersion', 'schema', 'schemaUrl', 'source', 'terms'].sort());
+  ['term', 'count', 'contexts', 'slotHints', 'note', 'createdAt', 'updatedAt', 'source'].forEach(function (field) {
+    assert.ok(schema.$defs.term.required.includes(field), 'schema 缺少必填字段 ' + field);
+  });
+});
+
+test('补录清单同时含 Markdown 与 JSON，并可预填 GitHub issue', function () {
+  let list = Feedback.recordUnknownTerms([], {
+    scene: ['量子蝴蝶'],
+    style: ['电影感']
+  }, {
+    idea: '一个女孩站在街边，背后有量子蝴蝶，电影感',
+    source: 'txt2img-prompt@test / lexicon test',
+    at: '2026-11-24T05:00:00.000Z'
+  }, '2026-11-24T05:00:00.000Z');
+  list = Feedback.setNote(list, '量子蝴蝶', '想译成 glowing butterfly / 场景元素');
+  const data = Feedback.exportFeedback(list, {
+    now: new Date('2026-11-24T06:30:00.000Z'),
+    source: 'txt2img-prompt@test / lexicon test'
+  });
+  const markdown = Feedback.markdownFor(data, {
+    isCovered: function (term) { return term === '电影感'; }
+  });
+
+  assert.ok(markdown.indexOf('# 词库待补录清单') === 0);
+  assert.ok(markdown.indexOf('量子蝴蝶') !== -1);
+  assert.ok(markdown.indexOf('想译成 glowing butterfly') !== -1);
+  assert.ok(markdown.indexOf('词库已可命中，可移除') !== -1);
+  assert.ok(markdown.indexOf('```json') !== -1);
+  assert.ok(markdown.indexOf('"schema": "t2i.lexicon-feedback/v1"') !== -1);
+  assert.ok(markdown.indexOf('不做颜色 × 物体笛卡尔积') !== -1);
+
+  const url = Feedback.issueUrlFor(data);
+  assert.ok(url.indexOf('https://github.com/zhangteng945/txt2img-prompt/issues/new?title=') === 0);
+  assert.ok(url.indexOf('body=') !== -1);
+  assert.ok(decodeURIComponent(url).indexOf('量子蝴蝶') !== -1);
+  assert.ok(decodeURIComponent(url).indexOf('不做颜色 × 物体笛卡尔积') !== -1);
+
+  const body = Feedback.issueBodyFor(data, { maxLength: 500 });
+  assert.ok(body.length <= 500);
+  assert.ok(body.indexOf('内容过长已截断') !== -1);
+});
+
+test('当前词库已命中的待补录词可标记，备注、删除和本机存储可往返', function () {
+  assert.strictEqual(Feedback.isCovered('电影感', TR), true);
+  assert.strictEqual(Feedback.isCovered('量子蝴蝶', TR), false);
+  assert.strictEqual(Feedback.isMeaningfulTerm('，。！？'), false);
+  assert.strictEqual(Feedback.isMeaningfulTerm('  '), false);
+  assert.strictEqual(Feedback.isMeaningfulTerm('量子蝴蝶'), true);
+
+  let list = Feedback.recordUnknownTerms([], {
+    scene: ['量子蝴蝶', '电影感']
+  }, {
+    idea: '电影感，量子蝴蝶',
+    source: 'test',
+    at: '2026-11-24T05:00:00.000Z'
+  }, '2026-11-24T05:00:00.000Z');
+  list = Feedback.setNote(list, '量子蝴蝶', '大概是发光的蝴蝶');
+  const noted = list.find(function (item) { return item.term === '量子蝴蝶'; });
+  assert.strictEqual(noted.note, '大概是发光的蝴蝶');
+
+  const removed = Feedback.removeTerm(list, '量子蝴蝶');
+  assert.strictEqual(removed.length, 1);
+  assert.strictEqual(removed[0].term, '电影感');
+
+  const fakeStorage = {
+    data: Object.create(null),
+    getItem: function (key) { return this.data[key] || null; },
+    setItem: function (key, value) { this.data[key] = String(value); }
+  };
+  assert.strictEqual(Feedback.saveTo(fakeStorage, list), true);
+  assert.ok(fakeStorage.data[Feedback.STORAGE_KEY]);
+  const loaded = Feedback.loadFrom(fakeStorage);
+  assert.strictEqual(loaded.length, 2);
+  const loadedButterfly = loaded.find(function (item) { return item.term === '量子蝴蝶'; });
+  assert.strictEqual(loadedButterfly.note, '大概是发光的蝴蝶');
+  assert.strictEqual(loadedButterfly.count, 1);
 });
 
 console.log('\n' + passed + ' tests passed.');

@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，支持词库搜索、收藏、历史和中英对照预览，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的提示词。">
+  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，支持词库搜索、收藏、历史、未收录待补录反馈和中英对照预览，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的提示词。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1245">
+  <link rel="stylesheet" href="styles.css?v=20261124-1316">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -64,10 +64,10 @@
       </div>
     </section>
 
-    <section class="library-bar" aria-label="搜索、收藏与历史">
+    <section class="library-bar" aria-label="搜索、收藏、历史与待补录">
       <div class="search-box">
         <span class="search-icon" aria-hidden="true">⌕</span>
-        <label class="sr-only" for="searchInput">搜索词库、已填框内容、收藏和历史</label>
+        <label class="sr-only" for="searchInput">搜索词库、已填框内容、收藏、历史和待补录</label>
         <input id="searchInput" type="search" placeholder="搜索词库、已填框、收藏和历史…" autocomplete="off" spellcheck="false">
         <button type="button" id="searchClear" class="search-clear" hidden>清除</button>
       </div>
@@ -75,6 +75,7 @@
         <button type="button" id="saveFavoriteBtn" class="library-button library-button-accent"><span aria-hidden="true">☆</span> 收藏当前</button>
         <button type="button" id="favoritesBtn" class="library-button"><span aria-hidden="true">▤</span> 收藏夹 <span class="count-pill" id="favoriteCount">0</span></button>
         <button type="button" id="historyBtn" class="library-button"><span aria-hidden="true">↺</span> 历史 <span class="count-pill" id="historyCount">0</span></button>
+        <button type="button" id="feedbackBtn" class="library-button"><span aria-hidden="true">✎</span> 待补录 <span class="count-pill" id="feedbackCount">0</span></button>
       </div>
       <div id="searchResults" class="search-results" hidden aria-live="polite"></div>
     </section>
@@ -90,9 +91,10 @@
 
       <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
         <span class="warning-icon" aria-hidden="true">!</span>
-        <div>
+        <div class="warning-copy">
           <strong>有未收录内容</strong>
           <p id="warningText"></p>
+          <button type="button" id="warningFeedbackBtn" class="warning-action">查看待补录</button>
         </div>
       </div>
 
@@ -167,7 +169,7 @@
     </section>
 
     <footer class="site-footer">
-      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板，不调用大模型，不收集数据。</p>
+      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板，不调用大模型，不上传数据。</p>
       <p>兼容 Lustify Endgame（SDXL）与 ComfyUI。提示词可继续按你的模型习惯微调。</p>
     </footer>
   </main>
@@ -235,20 +237,48 @@
     </section>
   </div>
 
+  <div id="feedbackModal" class="modal" hidden>
+    <div class="modal-overlay" data-close-modal></div>
+    <section class="modal-panel feedback-panel" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">保存在本机浏览器 · 可导出给大肥鱼</p>
+          <h2 id="feedbackTitle">未收录待补录</h2>
+        </div>
+        <button type="button" class="modal-close" data-close-modal aria-label="关闭待补录">×</button>
+      </header>
+      <div class="modal-body">
+        <div class="feedback-toolbar">
+          <p id="feedbackSummary" class="feedback-summary"></p>
+          <div class="feedback-export-actions">
+            <button type="button" id="copyFeedbackBtn" class="button button-dark feedback-export-button">复制补录清单</button>
+            <button type="button" id="downloadFeedbackBtn" class="button button-outline feedback-export-button">下载 JSON</button>
+            <button type="button" id="issueFeedbackBtn" class="button button-outline feedback-export-button">在 GitHub 提交反馈</button>
+            <button type="button" id="clearFeedbackBtn" class="button button-ghost feedback-clear-button">清空待补录</button>
+          </div>
+          <p class="feedback-guide">复制或下载后交给大肥鱼；也可以在 GitHub issue 里粘贴。页面不会自动提交；只有你点开 GitHub 并确认提交时，内容才会带到 GitHub。</p>
+        </div>
+        <div id="feedbackList" class="feedback-list"></div>
+      </div>
+      <p class="storage-note" id="feedbackStorageNote"></p>
+    </section>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <noscript>
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1245"></script>
-  <script src="js/lexicon.js?v=20261124-1245"></script>
-  <script src="js/translator.js?v=20261124-1245"></script>
-  <script src="js/parser.js?v=20261124-1245"></script>
-  <script src="js/slot-fill.js?v=20261124-1245"></script>
-  <script src="js/complete.js?v=20261124-1245"></script>
-  <script src="js/assemble.js?v=20261124-1245"></script>
-  <script src="js/negative.js?v=20261124-1245"></script>
-  <script src="js/app.js?v=20261124-1245"></script>
+  <script src="js/utils.js?v=20261124-1316"></script>
+  <script src="js/lexicon.js?v=20261124-1316"></script>
+  <script src="js/translator.js?v=20261124-1316"></script>
+  <script src="js/parser.js?v=20261124-1316"></script>
+  <script src="js/slot-fill.js?v=20261124-1316"></script>
+  <script src="js/complete.js?v=20261124-1316"></script>
+  <script src="js/assemble.js?v=20261124-1316"></script>
+  <script src="js/negative.js?v=20261124-1316"></script>
+  <script src="js/feedback.js?v=20261124-1316"></script>
+  <script src="js/app.js?v=20261124-1316"></script>
 </body>
 </html>

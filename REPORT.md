@@ -13,8 +13,55 @@
 - 生成后可打开完整中英对照预览，预览内也能一键复制
 - 正面 / 负面英文提示词可一键复制，并显示对应中文
 - 收藏、历史使用浏览器 `localStorage`，无后端
+- 新增「待补录」反馈通道：未收录片段自动记入本机、去重计数、保留最近上下文，可写备注并导出 Markdown + JSON 或预填 GitHub issue
 - 词典在本轮前 10,718 条基础上补厚到 **13,232 条规范词**（人工 7,183 + 组合 6,049）；object 从 **346 条增至 2,859 条**，按生活场景补了家具、厨房、食物、家电数码、文具玩具、运动乐器、街边设施、交通/建筑局部、自然物和动物用品。高频外貌匹配、短别名边界、「拒绝抽烟的广告」等既有回归继续通过
 - 不读取密钥，不访问大模型或付费 API
+
+### 1.1 本轮追加：未收录反馈通道
+
+本轮只做反馈通道，不根据虚构数据改词库；既有短别名边界、拒绝抽烟的广告、object 约 2,859、关系句分框等回归继续通过。
+
+**怎么用**
+
+1. 正常输入想法，点「补全并填入各框」或「生成提示词」。
+2. 页面把本次出现的未收录片段自动记入本机；搜索/收藏/历史那一行的「待补录」按钮会显示数量角标。
+3. 未收录警告条会说明「已自动记入本机待补录」，并给出「查看待补录」按钮，不需要用户自己抄。
+4. 打开「待补录」弹层后，可以：
+   - 看到每个词的出现次数、最近完整想法原文、可能所在框和时间；
+   - 写备注（大概意思 / 想译成什么英文 / 属于哪一类）；
+   - 删除单条或清空全部；
+   - 打开页面时按当前词库重新判断，已经能完整命中的词标记为「词库已可命中，可移除」。
+5. 「复制补录清单」复制一份结构化 Markdown + JSON；「下载 JSON」得到 `lexicon-feedback-YYYYMMDD.json`；「在 GitHub 提交反馈」打开 `zhangteng945/txt2img-prompt` 的 `issues/new`，预填标题和正文。页面不放 token，也不会用脚本自动建 issue。
+6. 大肥鱼按 `feedback/README.md` 和 `BRIEF-process-feedback.md` 处理：先看 `source`/`pageVersion`，去重，按正确类别补规范词和常用 alias，不做颜色 × 物体笛卡尔积，补回归测试，更新报告；不自行 push，不发布 Pages。
+
+**数据存在哪**
+
+- 只存在用户浏览器 `localStorage`，键名 `t2i.lexiconFeedback.v1`。
+- 同一词忽略大小写去重，`count` 累计出现次数；同一 `idea + slot` 的上下文只留最新一条，每个词最多保留最近 5 条。
+- 纯标点、纯空白和纯 emoji 不收集；最多保留 300 个词，超出时按最近更新时间淘汰旧词。
+- 页面不上传这些数据；清理浏览器数据会丢失，导出 JSON 后由用户自行保存或提交。
+
+**固定导出格式**
+
+- 标识：`t2i.lexicon-feedback/v1`
+- schema：`feedback/schema.json`
+- 顶层：`schema`、`schemaUrl`、`generator`、`pageVersion`、`exportedAt`、`source`、`terms`
+- 每个词条：`term`、`count`、`contexts`（完整想法原文 + 可能所在框 + 时间）、`slotHints`、`note`、`createdAt`、`updatedAt`、`source`
+- `source` 同时记录页面版本和当时词库的规范词 / 中文 alias / 英文 alias 规模，方便判断反馈对应哪一版冻结词库。
+
+**本轮文件**
+
+- 新增 `js/feedback.js`：纯函数收集、去重、导出、schema 版本、本机存储读写、GitHub issue URL 构造。
+- 新增 `feedback/schema.json`、`feedback/README.md`、`BRIEF-process-feedback.md`、`.github/ISSUE_TEMPLATE/lexicon-feedback.md`。
+- 修改 `index.html`、`styles.css`、`js/app.js`、`tests/core.test.js`、`REPORT.md`。
+
+**验证**
+
+- `node tests/core.test.js` → **26 项全部通过**，其中新增 4 项：待补录过滤/去重/累计/上下文上限、导出字段与 schema 一致、Markdown + JSON + GitHub issue 预填、当前词库命中标记与备注/删除/localStorage 往返。
+- 既有回归继续通过：短别名边界、「拒绝抽烟的广告」、object 约 2,859、关系句分框（走在沙滩上等）、补全与组装。
+- 另用临时 jsdom（不随项目发布）做了界面流程检查：填充/生成自动收集、备注写入 localStorage、复制内容含 Markdown + JSON、下载文件名为 `lexicon-feedback-YYYYMMDD.json`、GitHub issue 预填、删除/清空，以及重新打开页面加载并标记「词库已可命中」。
+- 手机宽度下复用现有全屏 modal；搜索行四个按钮改为两列换行，待补录导出按钮为两列、清空按钮独占一行，备注框 16px 避免 iOS 聚焦缩放。
+- 本轮没有新增或修改词库数据，也没有宣称覆盖率 99%。
 
 ## 2. 算法步骤
 
@@ -546,7 +593,7 @@
 - 词典规模测试新增：`object` 必须在 **2,500–4,000** 条之间；object 内规范中文、规范英文都不得重复；逐条验证 2,859 个 object 规范词都优先译回自己，不被更早条目的别名抢占；抽查「双人床 / 空气炸锅 / 无人机 / 消防栓 / 轮毂 / 天花板 / 蘑菇 / 狗项圈」均命中 object 且英文稳定。
 - 关系分框测试新增：`走在沙滩上`、`坐在椅子上`、`跑过街道`、`站在窗前`、`走在街上`、`坐在地上`、`靠在墙上`、`沿着河边散步` 等无人物句式，`女孩走在沙滩上`、`女孩沿着河边散步`、`她走在沙滩上` 等带人物/代词句式，`狗跑过街道`、`猫坐在椅子上` 等单字动物主语句式；逐句断言姿态框只放动作、场景框放地点、最终英文能自然拼回关系。
 - 本轮统计：object **346 → 2,859**（+2,513）；规范词 **10,718 → 13,232**；中文说法 **21,700 → 25,279**；英文说法 **15,553 → 19,547**。object 规范中英文重复均为 0。
-- 全量测试：`node tests/core.test.js` → **22 项全部通过**。短别名不切开长词、单字别名边界、「拒绝抽烟的广告」、覆盖轮日常词、既有关系句和补全/组装回归均继续通过。
+- 全量测试：`node tests/core.test.js` → **26 项全部通过**（含本轮反馈通道测试）。短别名不切开长词、单字别名边界、「拒绝抽烟的广告」、覆盖轮日常词、既有关系句和补全/组装回归均继续通过。
 
 ## 5. 已知局限 / 仍可能缺的类别
 
@@ -569,11 +616,16 @@
 10. **不做内容审核**：工具只负责把用户输入转成提示词，最终生成内容由使用者负责。
 11. **关系组装仍是单关系规则**：当前支持一个主体、一个目标、一个主要动作和尾部氛围（给……上 / 对着 / 朝 / 向 / 往 / 在……上 / 里 / 旁 / 前 / 后 / 下）。多重关系、倒装、被动句和长因果句仍可能退回普通短语翻译；未收录的目标物会保留原文，不会强行编造英文。
 12. **单字别名边界规则偏保守**：未收录的复合词（如「笑点」）会整体保留原文，而不是拆成「已知单字 + 残片」。这是为了避免「抽烟 → 拒绝抽 + 烟」这类误切；后续遇到新词应补独立词条，而不是放宽边界规则。
+13. **待补录只在本机**：数据存在当前浏览器 `localStorage`，不跨设备、不自动同步；清理浏览器数据会丢失。GitHub issue 必须由用户手动确认提交，页面不会自动建 issue，也不含 token。
+14. **「词库已可命中」只是当前版本的判断**：它表示当前词典能完整翻译该片段，不代表所有上下文都自然；复杂说法仍以人工补词和回归测试为准。
 
 ## 6. 文件清单
 
 - `index.html`、`styles.css`
-- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/app.js`
-- `js/lexicon.js` 内含 `GROUPS`、`EXTRA_GROUPS`、`COVERAGE_GROUPS` 人工词条，以及 `GARMENT_COLOR_ZH`、`MATERIAL_GARMENTS_ZH`、`PATTERN_GARMENTS_ZH` 等受限组合规则；`js/app.js` 内含搜索、收藏、历史、预览和 localStorage 逻辑
+- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/feedback.js`、`js/app.js`
+- `js/lexicon.js` 内含 `GROUPS`、`EXTRA_GROUPS`、`COVERAGE_GROUPS` 人工词条，以及 `GARMENT_COLOR_ZH`、`MATERIAL_GARMENTS_ZH`、`PATTERN_GARMENTS_ZH` 等受限组合规则；`js/app.js` 内含搜索、收藏、历史、待补录面板、预览和 localStorage 逻辑
 - `tests/core.test.js`
+- `feedback/schema.json`、`feedback/README.md`
+- `.github/ISSUE_TEMPLATE/lexicon-feedback.md`
+- `BRIEF-process-feedback.md`
 - `README.md`、`REPORT.md`

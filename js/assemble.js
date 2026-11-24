@@ -80,7 +80,9 @@
   }
 
   function assemble(slots, options) {
-    const addQuality = !!(options && options.quality === true);
+    const noLexicon = !!(options && (options.noLexicon || options.source === 'local-llm')) ||
+      !!(slots && slots.__scene && slots.__scene.englishFrom === 'model');
+    const addQuality = !!(options && options.quality === true) && !noLexicon;
     const phrases = [];
     const zhSections = [];
     const seen = Object.create(null);
@@ -134,7 +136,7 @@
       });
 
       let zh = U.cleanChinese(slot.zh || '');
-      if (!zh) {
+      if (!zh && !noLexicon) {
         const fallback = TR.translateEn(slot.en || '');
         zh = fallback.zh || '';
       }

@@ -1,26 +1,37 @@
 /*
- * 本地解析模型（Ollama）接入回归测试：全部用 mock fetch，不依赖本机服务。
+ * 本地模型主流程回归测试：全部使用 mock fetch，不依赖 Ollama 正在运行。
  * 运行：node tests/local-llm.test.js
+ *
+ * 覆盖重点：
+ *   - 整体描述 → 六字段中英对照 + 负向提示词；
+ *   - 成功路径零 Translator / 词库调用；
+ *   - 中文改动 → 英文字段 stale；重译只更新待更新字段，中文原样保留；
+ *   - 失败（超时/网络/无效 JSON/HTTP）只报 error，绝不自动走规则；
+ *   - 补全默认关闭、开启后标 inferred；
+ *   - 规则路径只在测试显式调用时才产生结果。
  */
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const assert = require('assert');
 
 global.window = global;
 
-['utils', 'lexicon', 'translator', 'scene', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback', 'local-llm']
+['utils', 'lexicon', 'translator', 'scene', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback', 'local-llm', 'prompt-flow']
   .forEach(function (name) {
     require(path.join(__dirname, '..', 'js', name + '.js'));
   });
 
 const T = global.T2I;
 const LocalLLM = T.LocalLLM;
+const PromptFlow = T.PromptFlow;
 const Parser = T.Parser;
 const SF = T.SlotFill;
-const Scene = T.Scene;
 const Assemble = T.Assemble;
 const Negative = T.Negative;
+const Scene = T.Scene;
+const TR = T.Translator;
 
 let passed = 0;
 const tests = [];
@@ -40,172 +51,237 @@ function responseWith(content, status) {
   };
 }
 
-function enabled(overrides) {
+function settings(overrides) {
   return Object.assign({
-    enabled: true,
     apiRoot: LocalLLM.DEFAULT_API_ROOT,
-    model: LocalLLM.DEFAULT_MODEL
+    model: LocalLLM.DEFAULT_MODEL,
+    infer: false
   }, overrides || {});
 }
 
-const SUCCESS_IDEA = '短发女人穿米色风衣站在樱花树下，柔和自然光';
-const SUCCESS_SPEC = {
-  units: [
-    { text: '短发女人', slot: 'person', role: 'subject' },
-    { text: '米色风衣', slot: 'outfit', role: 'outfit' },
-    { text: '站在樱花树下', slot: 'pose', role: 'action' },
-    { text: '柔和自然光', slot: 'light', role: 'light' }
-  ],
-  subjects: [{ text: '短发女人', attributes: ['短发'] }],
-  outfits: [{ text: '米色风衣', color: '米色', owner: '短发女人' }],
-  objects: [{ text: '樱花树', attributes: [] }],
-  relations: [{ type: 'located', from: '短发女人', to: '樱花树', text: '站在樱花树下' }]
-};
+function successPayload(overrides) {
+  const base = {
+    fields: {
+      person: {
+        zh: '短发女人，侧脸看向远处',
+        en: 'a woman with a short bob, seen in profile looking into the distance'
+      },
+      outfit: { zh: '米色风衣', en: 'wearing a cream trench coat' },
+      pose: { zh: '站在樱花树下', en: 'standing beneath a cherry tree' },
+      scene: { zh: '樱花树下', en: 'beneath a cherry tree' },
+      light: { zh: '柔和自然光', en: 'soft natural light' },
+      style: { zh: '', en: '' }
+    },
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' },
+    inferred: [],
+    notes: []
+  };
+  return Object.assign(base, overrides || {});
+}
 
-test('成功 JSON：场景树、六框、正负面与守恒检查都能用', function () {
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(SUCCESS_SPEC))); }
+const SUCCESS_IDEA = '短发女人穿米色风衣站在樱花树下，侧脸看向远处，柔和自然光';
+
+function okFetch(payload) {
+  return function () {
+    return Promise.resolve(responseWith(JSON.stringify(payload)));
+  };
+}
+
+function fieldState(payload) {
+  const fields = JSON.parse(JSON.stringify(payload.fields));
+  const slots = PromptFlow.normalizeSlots(fields);
+  return slots;
+}
+
+test('成功：整体描述拆成六字段中英对照、负向提示词，英文直接来自模型', function () {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(successPayload())
   }).then(function (result) {
     assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
     assert.strictEqual(result.requested, true);
-    assert.strictEqual(result.scene.origin, 'local-llm');
-    assert.ok(result.scene.structured);
-    assert.strictEqual(result.scene.subjects.length, 1);
-    assert.strictEqual(result.scene.subjects[0].zh, '女人');
-    assert.ok(result.scene.subjects[0].attributes.some(function (a) { return a.zh === '短发'; }));
-    assert.strictEqual(result.scene.outfits.length, 1);
-    assert.ok(result.scene.outfits[0].color && result.scene.outfits[0].color.en === 'beige');
-    assert.strictEqual(result.scene.objects.length, 1);
-    assert.ok(result.scene.relations.some(function (r) { return r.type === 'located'; }));
-    assert.deepStrictEqual(result.verify.issues, []);
-
-    const slots = result.slots;
-    assert.ok(/woman with short hair/.test(slots.person.en));
-    assert.ok(/wearing a beige trench coat/.test(slots.outfit.en));
-    assert.ok(/standing/.test(slots.pose.en));
-    assert.ok(/under a cherry blossom tree/.test(slots.scene.en));
-    assert.ok(/soft natural light/.test(slots.light.en));
-    assert.ok(/beige trench coat/.test(result.assembled.positiveEn));
-    assert.ok(/cherry blossom tree/.test(result.assembled.positiveEn));
-    assert.ok(result.negative.negativeEn.length > 0);
-  });
-});
-
-test('think 标签与代码围栏残留会被清掉，JSON 仍可解析', function () {
-  const content = '<think>先想一下...</think>\n```json\n' + JSON.stringify(SUCCESS_SPEC) + '\n```';
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith(content)); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'ok', result.reason);
-    assert.ok(result.scene.units.length >= 4);
-    assert.ok(result.scene.units.some(function (u) { return u.slot === 'pose' && /standing/.test(u.en); }));
-    assert.ok(result.scene.units.some(function (u) { return u.slot === 'scene' && /cherry blossom tree/.test(u.en); }));
-  });
-});
-
-test('无效 JSON → 回退 invalid-json，不抛异常', function () {
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith('抱歉，我无法输出 JSON。')); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
-    assert.strictEqual(result.code, 'invalid-json');
-    assert.ok(result.reason);
+    assert.strictEqual(result.model, 'qwen3.5:4b');
+    assert.strictEqual(result.fields.person.zh, '短发女人，侧脸看向远处');
+    assert.ok(/short bob/.test(result.fields.person.en));
+    assert.ok(/cream trench coat/.test(result.fields.outfit.en));
+    assert.ok(/beneath a cherry tree/.test(result.fields.pose.en));
+    assert.ok(/soft natural light/.test(result.fields.light.en));
+    assert.strictEqual(result.fields.style.zh, '');
+    assert.strictEqual(result.fields.style.en, '');
+    assert.strictEqual(result.fields.style.inferred, false);
+    assert.ok(/watermark/.test(result.negative.en));
+    assert.strictEqual(result.negative.zh, '低质量、模糊、水印');
+    assert.deepStrictEqual(result.inferred, []);
+    assert.strictEqual(result.parsed, undefined);
     assert.strictEqual(result.scene, undefined);
   });
 });
 
-test('JSON 结构不合法 → 回退 invalid-spec', function () {
-  const bad = { units: [{ text: '短发女人', slot: 'body' }] };
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(bad))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
-    assert.strictEqual(result.code, 'invalid-spec');
-    assert.ok(/slot/.test(result.detail));
-  });
-});
-
-test('模型改写原文 → 回退 invalid-spec，不能假装完整', function () {
-  const rewritten = { units: [{ text: '少女', slot: 'person', role: 'subject' }] };
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(rewritten))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
-    assert.strictEqual(result.code, 'invalid-spec');
-    assert.ok(/少女/.test(result.detail));
-  });
-});
-
-test('模型漏掉片段 → 回退 coverage 并指出漏掉的原文', function () {
-  const incomplete = {
-    units: [
-      { text: '短发女人', slot: 'person', role: 'subject' },
-      { text: '站在樱花树下', slot: 'pose', role: 'action' }
-    ]
+test('成功路径不调用 Translator / 词库补英文', function () {
+  const calls = [];
+  const originals = {
+    translateZh: TR.translateZh,
+    translateEn: TR.translateEn,
+    translateZhPhrase: TR.translateZhPhrase
   };
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(incomplete))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
-    assert.strictEqual(result.code, 'coverage');
-    assert.ok(/米色风衣|柔和自然光/.test(result.detail));
+  ['translateZh', 'translateEn', 'translateZhPhrase'].forEach(function (name) {
+    TR[name] = function () {
+      calls.push(name);
+      return { zh: '', en: '', unknown: [], matches: [] };
+    };
   });
-});
-
-test('模型把否定改写成肯定 → 回退 negation', function () {
-  const lost = { units: [{ text: '不要吸烟', slot: 'pose', role: 'action' }] };
-  return LocalLLM.compile(enabled(), '不要吸烟', {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(lost))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
-    assert.strictEqual(result.code, 'negation');
-  });
-});
-
-test('否定结构成功：正面不出现吸烟，负面补上 smoking', function () {
-  const spec = {
-    units: [],
-    negations: [{ text: '画面里不要有水印', target: '水印', scope: 'global' }]
-  };
-  return LocalLLM.compile(enabled(), '画面里不要有水印', {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(spec))); }
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(successPayload())
   }).then(function (result) {
     assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
-    assert.strictEqual(result.assembled.positiveEn, '');
-    assert.ok(/watermark/.test(result.negative.negativeEn));
-    assert.strictEqual(result.scene.negations[0].scope, 'global');
-    assert.strictEqual(result.scene.negations[0].targets[0].en, 'watermark');
+    assert.deepStrictEqual(calls, []);
+    assert.ok(/cream/.test(result.fields.outfit.en));
+  }).finally(function () {
+    Object.keys(originals).forEach(function (name) { TR[name] = originals[name]; });
   });
 });
 
-test('只给排除作用域也能保留否定并生成负面', function () {
-  const idea = '背景里不要有水印';
-  const spec = {
-    units: [],
-    scopes: [{ text: idea, scope: 'background', polarity: 'exclude', target: '水印' }]
+test('成功路径不调用 Parser / 规则编译器（不静默走规则）', function () {
+  let parserCalls = 0;
+  const original = Parser.parse;
+  Parser.parse = function () {
+    parserCalls += 1;
+    throw new Error('模型成功路径不应调用 Parser');
   };
-  return LocalLLM.compile(enabled(), idea, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(spec))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
-    assert.strictEqual(result.scene.negations.length, 1);
-    assert.strictEqual(result.scene.negations[0].scope, 'background');
-    assert.ok(/watermark on background/.test(result.negative.negativeEn));
-  });
-});
-
-test('「禁止吸烟」作为告示牌保留禁止含义，不退成单纯 smoking', function () {
-  const spec = { units: [{ text: '禁止吸烟', slot: 'scene', role: 'sign' }] };
-  return LocalLLM.compile(enabled(), '禁止吸烟', {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(spec))); }
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(successPayload())
   }).then(function (result) {
     assert.strictEqual(result.status, 'ok', result.reason);
-    assert.ok(/prohibited/.test(result.assembled.positiveEn));
-    assert.ok(!/(^|,\s*)smoking(,|$)/.test(result.assembled.positiveEn));
+    assert.strictEqual(parserCalls, 0);
+  }).finally(function () {
+    Parser.parse = original;
   });
 });
 
-test('超时 → 回退 timeout，并中止挂起的 fetch', function () {
+test('请求体：系统说明 + 用户原文，think:false、非流式，不包含词库', function () {
+  const request = LocalLLM.buildGenerateRequest(settings(), '女孩站在海边', { infer: false });
+  assert.strictEqual(request.url, LocalLLM.DEFAULT_API_ROOT + '/api/chat');
+  assert.strictEqual(request.body.stream, false);
+  assert.strictEqual(request.body.think, false);
+  assert.strictEqual(request.body.format, 'json');
+  assert.strictEqual(request.body.model, 'qwen3.5:4b');
+  assert.strictEqual(request.body.messages.length, 2);
+  assert.strictEqual(request.body.messages[0].role, 'system');
+  assert.strictEqual(request.body.messages[1].role, 'user');
+  assert.strictEqual(request.body.messages[1].content, '女孩站在海边');
+  const system = request.body.messages[0].content;
+  assert.ok(/JSON/.test(system));
+  assert.ok(/不要参照、检索或模仿任何外部词库/.test(system));
+  assert.ok(/不要编造/.test(system));
+  assert.ok(/person/.test(system) && /style/.test(system));
+  assert.ok(/补全选项已关闭/.test(system));
+  assert.ok(system.length < 4000);
+  assert.strictEqual(system.indexOf('词典已载入'), -1);
+  assert.strictEqual(system.indexOf('14,482'), -1);
+});
+
+test('补全开关：关闭时提示不要补，开启时只允许 light/style', function () {
+  const off = LocalLLM.buildSystemPrompt({ infer: false });
+  const on = LocalLLM.buildSystemPrompt({ infer: true });
+  assert.ok(/补全选项已关闭/.test(off));
+  assert.ok(/inferred 必须是空数组/.test(off));
+  assert.ok(/补全选项已开启/.test(on));
+  assert.ok(/只允许补 light 和 style/.test(on));
+  assert.ok(/绝不能补人物身份、剧情、服装/.test(on));
+});
+
+test('think 标签与代码围栏残留会被清掉，JSON 仍可解析', function () {
+  const content = '<think>先想一下...</think>\n```json\n' + JSON.stringify(successPayload()) + '\n```';
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: function () { return Promise.resolve(responseWith(content)); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason);
+    assert.ok(/short bob/.test(result.fields.person.en));
+  });
+});
+
+test('无效 JSON → status:error / invalid-json，不伪造 fallback', function () {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: function () { return Promise.resolve(responseWith('抱歉，我无法输出 JSON。')); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'invalid-json');
+    assert.ok(result.reason);
+    assert.strictEqual(result.fields, undefined);
+    assert.strictEqual(result.scene, undefined);
+  });
+});
+
+test('中文有内容但英文缺失 → status:error / missing-english，绝不用词库补', function () {
+  const bad = successPayload();
+  bad.fields.pose = { zh: '站在樱花树下', en: '' };
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(bad)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'missing-english');
+    assert.ok(/姿态与动作/.test(result.detail));
+    assert.strictEqual(result.fields, undefined);
+  });
+});
+
+test('英文里残留中文 → 判为不可用，不把中文当英文', function () {
+  const bad = successPayload();
+  bad.fields.person = { zh: '女孩', en: 'a girl 在看海' };
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(bad)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'missing-english');
+  });
+});
+
+test('缺少英文负向提示词 → status:error / empty-negative', function () {
+  const bad = successPayload({ negative: { zh: '低质量', en: '' } });
+  bad.negative = { zh: '低质量', en: '' };
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(bad)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'empty-negative');
+  });
+});
+
+test('补全默认关闭：模型返回 inferred 时拒绝，避免把推测当原文', function () {
+  const payload = successPayload({ inferred: ['light'] });
+  return LocalLLM.generate(settings({ infer: false }), SUCCESS_IDEA, {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'inferred');
+    assert.ok(/补全开关是关闭的/.test(result.detail));
+  });
+});
+
+test('补全开启：light 允许 inferred 并标记；人物补全仍拒绝', function () {
+  const payload = successPayload({ inferred: ['light'] });
+  return LocalLLM.generate(settings({ infer: true }), SUCCESS_IDEA, {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(result.fields.light.inferred, true);
+    assert.strictEqual(result.fields.person.inferred, false);
+    assert.deepStrictEqual(result.inferred, ['light']);
+    assert.strictEqual(result.inferredCount, 1);
+  });
+});
+
+test('补全开启也只允许 light/style：inferred 里出现 person 直接报错', function () {
+  const payload = successPayload({ inferred: ['person'] });
+  return LocalLLM.generate(settings({ infer: true }), SUCCESS_IDEA, {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'invalid-spec');
+    assert.ok(/只允许补光线\/镜头和画风/.test(result.detail));
+  });
+});
+
+test('超时 → status:error / timeout，挂起 fetch 被中止；不返回规则结果', function () {
   let sawAbort = false;
   const hanging = function (url, init) {
     return new Promise(function (resolve, reject) {
@@ -217,21 +293,22 @@ test('超时 → 回退 timeout，并中止挂起的 fetch', function () {
       });
     });
   };
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
     fetchImpl: hanging,
     timeoutMs: 30
   }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
+    assert.strictEqual(result.status, 'error');
     assert.strictEqual(result.code, 'timeout');
     assert.strictEqual(sawAbort, true);
+    assert.strictEqual(result.fields, undefined);
   });
 });
 
-test('网络错误 → 回退 network，并提示模型没开/休眠/Tailscale/跨域', function () {
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
+test('网络错误 → status:error / network，并提示模型没开/休眠/Tailscale/跨域', function () {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
     fetchImpl: function () { return Promise.reject(new TypeError('Failed to fetch')); }
   }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
+    assert.strictEqual(result.status, 'error');
     assert.strictEqual(result.code, 'network');
     assert.ok(/模型没开/.test(result.reason));
     assert.ok(/休眠/.test(result.reason));
@@ -240,125 +317,270 @@ test('网络错误 → 回退 network，并提示模型没开/休眠/Tailscale/�
   });
 });
 
-test('HTTP 403 → 回退 cors', function () {
-  return LocalLLM.compile(enabled(), SUCCESS_IDEA, {
+test('HTTP 403 → status:error / cors，不返回任何槽位', function () {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
     fetchImpl: function () { return Promise.resolve(responseWith('', 403)); }
   }).then(function (result) {
-    assert.strictEqual(result.status, 'fallback');
+    assert.strictEqual(result.status, 'error');
     assert.strictEqual(result.code, 'cors');
+    assert.strictEqual(result.fields, undefined);
   });
 });
 
-test('开关关闭 → disabled 且零请求；规则路径仍能给出可用结果', function () {
-  let calls = 0;
-  const settings = enabled({ enabled: false });
-  return LocalLLM.compile(settings, SUCCESS_IDEA, {
-    fetchImpl: function () {
-      calls += 1;
-      return Promise.resolve(responseWith(JSON.stringify(SUCCESS_SPEC)));
-    }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'disabled');
-    assert.strictEqual(result.requested, false);
-    assert.strictEqual(calls, 0);
+test('中文改动 → 对应英文 stale；重译成功更新英文且保留用户中文', function () {
+  const slots = fieldState(successPayload());
+  assert.strictEqual(PromptFlow.pendingKeys(slots).length, 0);
+  slots.pose.zh = '转身走向街角，手里拿着一束花';
+  PromptFlow.markChineseEdited(slots, 'pose');
+  assert.strictEqual(slots.pose.stale, true);
+  assert.strictEqual(slots.person.stale, false);
+  assert.deepStrictEqual(PromptFlow.pendingKeys(slots), ['pose']);
 
+  const response = successPayload({
+    fields: Object.assign({}, successPayload().fields, {
+      // 故意让模型回写中文：页面必须忽略，保留用户当前中文。
+      pose: {
+        zh: '站在樱花树下（模型初稿）',
+        en: 'turning toward the street corner, holding a bouquet'
+      }
+    })
+  });
+  let requestBody = null;
+  const fetchImpl = function (url, init) {
+    requestBody = JSON.parse(init.body);
+    return Promise.resolve(responseWith(JSON.stringify(response)));
+  };
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: JSON.parse(JSON.stringify(slots)),
+    pending: PromptFlow.pendingKeys(slots),
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' }
+  }, { fetchImpl: fetchImpl }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.deepStrictEqual(result.pending, ['pose']);
+    assert.ok(/turning toward the street corner/.test(result.fields.pose.en));
+
+    const beforePersonEn = slots.person.en;
+    const applied = PromptFlow.applyEnglish(slots, result.fields, result.pending);
+    assert.strictEqual(applied.ok, true);
+    assert.deepStrictEqual(applied.updated, ['pose']);
+    assert.strictEqual(slots.pose.zh, '转身走向街角，手里拿着一束花');
+    assert.ok(/turning toward the street corner/.test(slots.pose.en));
+    assert.strictEqual(slots.pose.stale, false);
+    assert.strictEqual(slots.person.en, beforePersonEn);
+    assert.strictEqual(slots.person.zh, '短发女人，侧脸看向远处');
+    assert.deepStrictEqual(PromptFlow.pendingKeys(slots), []);
+
+    // 重译请求带的是当前改过的中文 + 原始描述 + 当前英文上下文，
+    // 不是最初模型初稿中文。
+    const user = JSON.parse(requestBody.messages[1].content);
+    assert.strictEqual(user.original_idea, SUCCESS_IDEA);
+    assert.deepStrictEqual(user.pending, ['pose']);
+    assert.strictEqual(user.current_fields.pose.zh, '转身走向街角，手里拿着一束花');
+    assert.ok(/a woman with a short bob/.test(user.current_fields.person.en));
+    assert.strictEqual(user.current_fields.person.zh, '短发女人，侧脸看向远处');
+    assert.notStrictEqual(user.current_fields.pose.zh, '站在樱花树下');
+    assert.ok(!/模型初稿/.test(requestBody.messages[1].content));
+    assert.ok(requestBody.think === false);
+    assert.ok(/不要参照、检索或模仿任何外部词库/.test(requestBody.messages[0].content));
+  });
+});
+
+test('中文清空 → 英文标 stale；重译返回空英文时清空对应英文，其他字段不动', function () {
+  const slots = fieldState(successPayload());
+  slots.light.zh = '';
+  PromptFlow.markChineseEdited(slots, 'light');
+  assert.strictEqual(slots.light.stale, true);
+  assert.deepStrictEqual(PromptFlow.pendingKeys(slots), ['light']);
+  const beforePersonEn = slots.person.en;
+  const response = {
+    fields: { light: { en: '' } },
+    negative: { zh: '低质量', en: 'low quality' }
+  };
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: JSON.parse(JSON.stringify(slots)),
+    pending: ['light'],
+    negative: { zh: '低质量', en: 'low quality' }
+  }, {
+    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(response))); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    const applied = PromptFlow.applyEnglish(slots, result.fields, ['light']);
+    assert.strictEqual(applied.ok, true);
+    assert.strictEqual(slots.light.en, '');
+    assert.strictEqual(slots.light.stale, false);
+    assert.strictEqual(slots.person.en, beforePersonEn);
+    assert.deepStrictEqual(PromptFlow.pendingKeys(slots), []);
+  });
+});
+
+test('重译失败（网络）保留已有中文、英文和 stale 标记，不自动用词库', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '转身走向街角';
+  PromptFlow.markChineseEdited(slots, 'pose');
+  const before = JSON.parse(JSON.stringify(slots));
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: before,
+    pending: ['pose'],
+    negative: { zh: '低质量', en: 'low quality' }
+  }, {
+    fetchImpl: function () { return Promise.reject(new TypeError('Failed to fetch')); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'network');
+    assert.strictEqual(result.fields, undefined);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(slots)), before);
+    assert.strictEqual(slots.pose.stale, true);
+    assert.deepStrictEqual(PromptFlow.pendingKeys(slots), ['pose']);
+  });
+});
+
+test('重译结果缺 pending 字段 → error / missing-english，整体不落盘', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '转身走向街角';
+  PromptFlow.markChineseEdited(slots, 'pose');
+  const before = JSON.parse(JSON.stringify(slots));
+  const response = {
+    fields: { pose: { en: '' } },
+    negative: { zh: '低质量', en: 'low quality' }
+  };
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: before,
+    pending: ['pose'],
+    negative: { zh: '低质量', en: 'low quality' }
+  }, {
+    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(response))); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'missing-english');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(slots)), before);
+    assert.strictEqual(PromptFlow.applyEnglish(slots, result.fields || {}, ['pose']).ok, false);
+    assert.strictEqual(slots.pose.stale, true);
+  });
+});
+
+test('重译超时 → error / timeout，已有编辑不变', function () {
+  const slots = fieldState(successPayload());
+  slots.light.zh = '夜晚霓虹光';
+  PromptFlow.markChineseEdited(slots, 'light');
+  const before = JSON.parse(JSON.stringify(slots));
+  const hanging = function (url, init) {
+    return new Promise(function (resolve, reject) {
+      init.signal.addEventListener('abort', function () {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  };
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: before,
+    pending: ['light'],
+    negative: { zh: '低质量', en: 'low quality' }
+  }, { fetchImpl: hanging, timeoutMs: 25 }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'timeout');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(slots)), before);
+  });
+});
+
+test('规则路径只在显式调用时执行：模型失败后手动跑 Parser 仍可用', function () {
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: function () { return Promise.reject(new TypeError('Failed to fetch')); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.scene, undefined);
+
+    // 模拟用户点「改用规则生成（次要）」；这是显式调用，不是自动回退。
     const parsed = Parser.parse(SUCCESS_IDEA);
     const filled = SF.fill(parsed);
     const assembled = Assemble.assemble(filled.slots, { quality: false });
     const negative = Negative.build(assembled.positiveEn, Scene.negativePlan(parsed.scene));
     assert.ok(assembled.positiveEn.length > 0);
     assert.ok(negative.negativeEn.length > 0);
+    assert.ok(assembled.positiveEn.indexOf('beige trench coat') !== -1);
   });
 });
 
-test('请求体只含系统说明 + 用户原文，thinking 关闭，非流式', function () {
-  const request = LocalLLM.buildRequest(enabled(), '女孩站在海边');
-  assert.strictEqual(request.url, LocalLLM.DEFAULT_API_ROOT + '/api/chat');
-  assert.strictEqual(request.body.stream, false);
-  assert.strictEqual(request.body.think, false);
-  assert.strictEqual(request.body.format, 'json');
-  assert.strictEqual(request.body.model, 'qwen3.5:4b');
-  assert.strictEqual(request.body.messages.length, 2);
-  assert.strictEqual(request.body.messages[0].role, 'system');
-  assert.strictEqual(request.body.messages[1].role, 'user');
-  assert.strictEqual(request.body.messages[1].content, '女孩站在海边');
-  assert.ok(/JSON/.test(request.body.messages[0].content));
-  assert.ok(/不要编造/.test(request.body.messages[0].content));
-  // 不把整部词库塞进请求。
-  assert.ok(request.body.messages[0].content.length < 4000);
-  assert.strictEqual(request.body.messages[0].content.indexOf('词典已载入'), -1);
-});
-
-test('设置读写：默认关闭、默认 Tailscale HTTPS 与 qwen3.5:4b', function () {
+test('设置读写：默认主流程、infer 默认关闭、旧 enabled:false 不再关掉模型', function () {
   const memory = Object.create(null);
   const storage = {
     getItem: function (key) { return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null; },
     setItem: function (key, value) { memory[key] = String(value); }
   };
   const fresh = LocalLLM.loadSettings(storage);
-  assert.strictEqual(fresh.enabled, false);
   assert.strictEqual(fresh.apiRoot, 'https://macbook-pro.tail349cac.ts.net:11434');
   assert.strictEqual(fresh.model, 'qwen3.5:4b');
+  assert.strictEqual(fresh.infer, false);
 
-  LocalLLM.saveSettings(storage, { enabled: true, apiRoot: 'http://localhost:11434/', model: ' qwen3.5:4b ' });
+  memory[LocalLLM.STORAGE_KEY] = JSON.stringify({ enabled: false, apiRoot: 'http://localhost:11434', model: 'qwen3.5:4b' });
+  const old = LocalLLM.loadSettings(storage);
+  assert.strictEqual(old.apiRoot, 'http://localhost:11434');
+  assert.strictEqual(old.infer, false);
+
+  LocalLLM.saveSettings(storage, { apiRoot: ' http://127.0.0.1:11434/ ', model: ' qwen3.5:4b ', infer: true });
   const loaded = LocalLLM.loadSettings(storage);
-  assert.strictEqual(loaded.enabled, true);
-  assert.strictEqual(loaded.apiRoot, 'http://localhost:11434');
+  assert.strictEqual(loaded.apiRoot, 'http://127.0.0.1:11434');
   assert.strictEqual(loaded.model, 'qwen3.5:4b');
-
-  LocalLLM.saveSettings(storage, { enabled: false, apiRoot: '', model: '' });
-  const fallback = LocalLLM.loadSettings(storage);
-  assert.strictEqual(fallback.apiRoot, LocalLLM.DEFAULT_API_ROOT);
-  assert.strictEqual(fallback.model, LocalLLM.DEFAULT_MODEL);
+  assert.strictEqual(loaded.infer, true);
 });
 
-test('场景接入：对象属性、颜色绑定、关系、例外都进入同一棵树', function () {
-  const raw = '除了眼睛，其他部分都使用低饱和色彩';
-  const spec = {
-    units: [{ text: '低饱和色彩', slot: 'style', role: 'style' }],
-    scopes: [{ text: raw, scope: 'all', polarity: 'apply', target: '低饱和色彩', exception: '眼睛' }],
-    exceptions: [{ text: '眼睛' }]
+test('历史兼容：旧记录 pendingEnglish 会恢复为字段 stale', function () {
+  const saved = {
+    person: { zh: '女孩', en: 'a girl' },
+    outfit: { zh: '红裙', en: 'red dress' },
+    pose: { zh: '站着', en: 'standing' },
+    scene: { zh: '', en: '' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
   };
-  const validation = LocalLLM.validateSpec(spec, raw);
-  assert.strictEqual(validation.ok, true, validation.message);
-  const scene = Scene.fromSpec(spec, raw);
-  assert.strictEqual(scene.scopes.length, 1);
-  assert.strictEqual(scene.scopes[0].polarity, 'apply');
-  assert.strictEqual(scene.scopes[0].exception, '眼睛');
-  assert.strictEqual(scene.exceptions[0].zh, '眼睛');
-  assert.ok(/desaturated colors/.test(scene.units[0].en));
-});
+  const slots = PromptFlow.normalizeSlots(saved, ['outfit']);
+  assert.strictEqual(slots.outfit.stale, true);
+  assert.strictEqual(slots.person.stale, false);
+  assert.deepStrictEqual(PromptFlow.pendingKeys(slots), ['outfit']);
 
-test('关系句复用规则拆分：颜色绑到物体，方位短语进场景框', function () {
-  const idea = '穿红色裙子的女孩站在蓝色汽车旁';
-  const spec = {
-    units: [
-      { text: '女孩', slot: 'person', role: 'subject' },
-      { text: '红色裙子', slot: 'outfit', role: 'outfit' },
-      { text: '站在蓝色汽车旁', slot: 'pose', role: 'action' }
-    ],
-    subjects: [{ text: '女孩' }],
-    outfits: [{ text: '红色裙子', color: '红色', owner: '女孩' }],
-    objects: [{ text: '蓝色汽车', color: '蓝色' }],
-    relations: [{ type: 'located', from: '女孩', to: '蓝色汽车', text: '站在蓝色汽车旁' }]
-  };
-  return LocalLLM.compile(enabled(), idea, {
-    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(spec))); }
-  }).then(function (result) {
-    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
-    assert.ok(/standing/.test(result.slots.pose.en));
-    assert.ok(/next to a blue car/.test(result.slots.scene.en));
-    assert.ok(/a girl wearing a red dress, standing next to a blue car/.test(result.assembled.positiveEn));
-    assert.deepStrictEqual(result.verify.issues, []);
+  const legacy = PromptFlow.normalizeSlots({
+    person: { zh: '女孩', en: '' }
   });
+  assert.deepStrictEqual(PromptFlow.pendingKeys(legacy), ['person']);
 });
 
-test('coverageGaps 不把标点和虚词算成漏写，但会抓住实义片段', function () {
-  const gaps = LocalLLM.coverageGaps({ units: [{ text: '女孩', slot: 'person' }] }, '女孩，站在樱花树下');
-  assert.strictEqual(gaps.join(''), '站樱花树下');
-  assert.ok(gaps.indexOf('樱花树下') !== -1);
-  const clean = LocalLLM.coverageGaps({ units: [{ text: '女孩', slot: 'person' }] }, '女孩的');
-  assert.deepStrictEqual(clean, []);
+test('中文改动 / 英文手改的 stale 规则可逆，重译只碰传入字段', function () {
+  const slots = PromptFlow.normalizeSlots(successPayload().fields);
+  slots.person.zh = '银发女人';
+  PromptFlow.markChineseEdited(slots, 'person');
+  assert.strictEqual(slots.person.stale, true);
+  slots.person.en = 'a silver-haired woman';
+  PromptFlow.markEnglishEdited(slots, 'person');
+  assert.strictEqual(slots.person.stale, false);
+
+  slots.person.zh = '银发女人，侧脸';
+  PromptFlow.markChineseEdited(slots, 'person');
+  slots.outfit.zh = '黑色长裙';
+  PromptFlow.markChineseEdited(slots, 'outfit');
+  const applied = PromptFlow.applyEnglish(slots, {
+    person: { en: 'a silver-haired woman in profile' },
+    outfit: { en: 'wearing a black long dress' }
+  }, ['person']);
+  assert.strictEqual(applied.ok, true);
+  assert.strictEqual(slots.person.en, 'a silver-haired woman in profile');
+  assert.strictEqual(slots.person.stale, false);
+  assert.strictEqual(slots.outfit.en, 'wearing a cream trench coat');
+  assert.strictEqual(slots.outfit.stale, true);
+});
+
+test('app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）', function () {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  const finishStart = app.indexOf('function finishLocalFill');
+  const nextFunction = app.indexOf('function currentFieldPayload', finishStart);
+  const block = app.slice(finishStart, nextFunction > finishStart ? nextFunction : finishStart + 4000);
+  assert.ok(/setLocalStatus\(\s*'error'/.test(block), '失败时应显示 error 状态');
+  assert.ok(block.indexOf('fillFromParsed') === -1, '模型失败不应自动调用规则路径');
+  assert.ok(block.indexOf('Parser.parse') === -1, '模型失败不应自动调用 Parser');
 });
 
 (async function run() {

@@ -1,14 +1,18 @@
 /*
- * local-llm.js — 可选的本机 Ollama 结构化解析
+ * local-llm.js — 本地模型主流程
  *
- * 只做四件事：
- *   1. 生成 POST {apiRoot}/api/chat 的非流式请求（关闭 thinking）；
- *   2. 去掉模型可能残留的 think 标签，解析唯一一个 JSON 对象；
- *   3. 校验模型给的是不是「原文片段的精确标注」，漏写/改写/编造就判失败；
- *   4. 交给 scene.js 的 fromSpec 建同一棵场景树，再走原来的六框/组装/负面/守恒。
+ * 页面把用户「整体描述」直接交给本机 Ollama（qwen3.5:4b）：模型自己理解、
+ * 拆成六个中英对照字段，并给出负向提示词。这里只负责：
+ *   1. 构造 /api/chat 的非流式请求（think:false）；
+ *   2. 清理 think 标签、解析唯一一个 JSON 对象；
+ *   3. 校验六字段是否中英齐全、英文是否可用，并校验「补全」标记；
+ *   4. 用户改中文后，用当前六个中文框 + 原始描述 + 现有英文作上下文，
+ *      只重译待更新字段。
  *
- * 任何失败都以 status:'fallback' 返回原因，由 app.js 回退规则编译器。
- * 开关关闭时 compile() 直接返回 disabled，不发任何请求。
+ * 失败一律返回 status:'error'，绝不自动改成规则/词库结果；规则路径只能由
+ * 页面上的「改用规则生成（次要）」显式触发。
+ *
+ * 成功路径不读取、不发送、不调用词库；模型英文原样进入六框。
  */
 (function () {
   'use strict';
@@ -21,64 +25,135 @@
   const STORAGE_KEY = 't2i.localLLM.v1';
   const TIMEOUT_MS = 50000;
   const SLOTS = ['person', 'outfit', 'pose', 'scene', 'light', 'style'];
-  const SCOPES = ['global', 'subject', 'background'];
+  const SLOT_LABELS = {
+    person: '人物与外貌',
+    outfit: '服装与造型',
+    pose: '姿态与动作',
+    scene: '场景与背景',
+    light: '光线与镜头',
+    style: '画风与质感'
+  };
+  const SLOT_ALIASES = {
+    person: 'person',
+    '人物': 'person',
+    '人物与外貌': 'person',
+    'subject': 'person',
+    'appearance': 'person',
+    outfit: 'outfit',
+    '服装': 'outfit',
+    '服装与造型': 'outfit',
+    'clothing': 'outfit',
+    pose: 'pose',
+    '姿态': 'pose',
+    '姿态与动作': 'pose',
+    'action': 'pose',
+    scene: 'scene',
+    '场景': 'scene',
+    '场景与背景': 'scene',
+    'background': 'scene',
+    light: 'light',
+    '光线': 'light',
+    '光线与镜头': 'light',
+    'lighting': 'light',
+    'camera': 'light',
+    style: 'style',
+    '画风': 'style',
+    '画风与质感': 'style',
+    'texture': 'style'
+  };
 
-  const SYSTEM_PROMPT = [
-    '你是中文文生图提示词的结构化解析器。只输出一个 JSON 对象，不要输出 Markdown、代码围栏、解释或 <think> 标签。',
+  const BASE_PROMPT = [
+    '你是中文文生图提示词的理解、拆解与翻译器。只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 <think> 标签。',
     '',
-    '任务：把用户的整段想法拆成不重叠、不遗漏的原文片段，并标注六个月框槽位和语义角色。',
-    '所有 text 字段必须是用户原文里的连续子串，逐字复制；不要翻译、改写、缩写或补写。',
+    '任务：读懂用户的整段中文描述，把它拆成六个中英对照字段，并由你自己把每个中文字段翻译成自然、简洁、适合文生图逗号分隔提示词的英文。',
     '',
-    '槽位 slot 只能是：person, outfit, pose, scene, light, style。',
-    '角色 role 只能是：subject, attribute, outfit, object, action, place, light, camera, style, mood, sign, other。',
-    '',
-    '输出结构：',
-    '{',
-    '  "units": [{"text":"原文片段","slot":"person|outfit|pose|scene|light|style","role":"上面列出的角色"}],',
-    '  "subjects": [{"text":"人物原文","attributes":["原文属性"],"outfit_color":"原文颜色"}],',
-    '  "objects": [{"text":"物体或地点原文","attributes":["原文属性"],"color":"原文颜色","distance":"原文距离词"}],',
-    '  "outfits": [{"text":"服装原文","color":"原文颜色","owner":"人物原文"}],',
-    '  "relations": [{"type":"wearing|located|next_to|holding|pose|distance|other","from":"原文","to":"原文","text":"关系原文"}],',
-    '  "negations": [{"text":"否定原文","target":"被否定的原文","scope":"global|subject|background","topic":"范围原文"}],',
-    '  "scopes": [{"text":"范围原文","scope":"global|subject|background|all","polarity":"exclude|allow|apply","target":"原文","exception":"例外原文"}],',
-    '  "exceptions": [{"text":"例外原文","target":"作用原文"}],',
-    '  "notes": []',
-    '}',
+    '六个字段（JSON key 固定）：',
+    '- person：人物与外貌。身份、年龄、脸型、发型发色、眼睛、表情、妆容。',
+    '- outfit：服装与造型。服装、颜色、材质、鞋包、首饰、妆造细节。',
+    '- pose：姿态与动作。站坐行走、手势、视线、情绪动作，以及动作的主体、对象、方向和关系。',
+    '- scene：场景与背景。地点、时间、天气、室内外、背景元素及物体关系。',
+    '- light：光线与镜头。光源、光质、色温、焦段、景深、构图、机位。',
+    '- style：画风与质感。摄影风格、电影感、胶片、调色、画风、质感。',
     '',
     '硬规则：',
-    '1. units 必须覆盖用户原文的全部实义内容。每个片段只放一次；标点、语气词可以不放。',
-    '2. 不要编造用户没说的光线、镜头、景深、画风、身份、人数、服装、颜色、动作或剧情。用户没提就留空数组。',
-    '3. 否定、禁止、允许、例外和作用范围必须原样保留，不能改写成肯定。',
-    '   例如「禁止吸烟」必须保持禁止含义：如果它是画面里的告示牌，放进 units（role=sign, slot=scene），不要只输出 smoking；如果是要求画面里不要出现吸烟，写进 negations，target 填「吸烟」。',
-    '4. 词库不做去敏感化，保留原意和程度词；不要替换成更温和或更宽泛的说法。',
-    '5. 「除了A，其他都用B」：B 放进 units，A 放进 exceptions，并在 scopes 写 scope=all, polarity=apply, target=B, exception=A。',
-    '6. 穿着、拿着、站在/坐在某处、旁边、远处等关系写进 relations；人物、服装、物体也要各自出现在 units 和 subjects/outfits/objects 中。',
-    '7. 一个地点动作可以写成 pose 的完整片段（如「站在樱花树下」），物体再单独放进 objects；允许局部重复，但不要引入原文没有的字。',
-    '8. 没有把握的片段宁可按原文放进 units，也不要用同义词替换。',
+    '1. 每个字段的 zh 用简洁中文写该维度的完整内容；要保留动作的主体/对象、否定、关系和范围，不能只剩孤立词标签。',
+    '2. 每个非空 zh 必须配 en；en 是你按整段上下文自己翻译的英文，不是中文标签的字面堆叠。',
+    '3. 不要参照、检索或模仿任何外部词库、词典或固定译法；同一个中文词在不同上下文里可以译成不同英文。',
+    '4. 不要编造用户没说的光线、镜头、景深、画风、身份、人数、服装、颜色、动作、视线、侧脸、表情或剧情。用户没提的字段留空字符串。',
+    '4b. 光线/晨光/窗光只放 light，不要写进 scene；scene 只写地点、时间、天气和背景元素。不要把动作重复塞进 person 或 scene。',
+    '5. 否定/禁止必须保持原意：画面里不要出现的东西放进 negative，不能变成正面肯定；局部否定要保留人物/背景/整体范围。',
+    '6. negative 写一条可直接粘贴的英文负面提示词，并配中文对照；不要和正面内容冲突。',
+    '7. 只使用 JSON 字符串，不要数组包字段；字段顺序按 person, outfit, pose, scene, light, style。',
     '',
-    '格式示例（只是示例，换成用户原文；不得照抄示例内容）：',
+    '输出结构（六个字段都要出现；没有内容的写空字符串）：',
+    '{',
+    ' "fields": {',
+    '   "person": {"zh":"中文","en":"English"},',
+    '   "outfit": {"zh":"中文","en":"English"},',
+    '   "pose": {"zh":"中文","en":"English"},',
+    '   "scene": {"zh":"中文","en":"English"},',
+    '   "light": {"zh":"中文","en":"English"},',
+    '   "style": {"zh":"中文","en":"English"}',
+    ' },',
+    ' "negative": {"zh":"中文对照","en":"low quality, blurry, watermark"},',
+    ' "inferred": [],',
+    ' "notes": []',
+    '}',
+    '',
+    '示例（只示范粒度，不要照抄内容）：',
     '用户：短发女人穿米色风衣站在樱花树下，柔和自然光',
-    '输出：{"units":[{"text":"短发女人","slot":"person","role":"subject"},{"text":"米色风衣","slot":"outfit","role":"outfit"},{"text":"站在樱花树下","slot":"pose","role":"action"},{"text":"柔和自然光","slot":"light","role":"light"}],"subjects":[{"text":"短发女人","attributes":["短发"]}],"outfits":[{"text":"米色风衣","color":"米色","owner":"短发女人"}],"objects":[{"text":"樱花树"}],"relations":[{"type":"located","from":"短发女人","to":"樱花树","text":"站在樱花树下"}],"negations":[],"scopes":[],"exceptions":[]}'
+    '输出：{"fields":{"person":{"zh":"短发女人","en":"a woman with a short bob"},"outfit":{"zh":"米色风衣","en":"wearing a cream trench coat"},"pose":{"zh":"站在樱花树下","en":"standing beneath a cherry tree"},"scene":{"zh":"樱花树下","en":"beneath a cherry tree"},"light":{"zh":"柔和自然光","en":"soft natural light"},"style":{"zh":"","en":""}},"negative":{"zh":"低质量、模糊、水印","en":"low quality, blurry, watermark"},"inferred":[],"notes":[]}'
+  ];
+
+  const INFER_ON = [
+    '',
+    '补全选项已开启：如果用户完全没有提到光线/镜头或画风，可以各补一条最常见、克制的英文，并在 inferred 数组里写 "light" 或 "style"。',
+    '只允许补 light 和 style；绝不能补人物身份、剧情、服装、服装颜色、动作或物体。其他字段没提到就留空。'
+  ];
+
+  const INFER_OFF = [
+    '',
+    '补全选项已关闭：不要补任何用户没提到的光线、镜头、景深、画风或质感；对应字段必须留空字符串，inferred 必须是空数组。'
+  ];
+
+  const RETRANSLATE_PROMPT = [
+    '你是中文文生图提示词的英文重译者。只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 <think> 标签。',
+    '',
+    '用户已经改过某些字段的中文。现在必须以 current_fields 里的当前中文为唯一依据重新翻译英文，并带上 original_idea 与其余字段作为上下文。',
+    '',
+    '硬规则：',
+    '1. 绝不修改、回写或猜测中文；不要输出新的中文内容替代 current_fields。不要把用户改过的中文改回最初的整体描述或模型初稿。',
+    '2. 对 pending 里的每个字段，必须给出准确英文 en；也要给其余非空字段的 en 作为上下文（页面只会更新 pending 字段）。',
+    '3. 保持动作的主体/对象、否定、关系、方位和范围，不能只剩孤立英文标签。',
+    '4. 不要添加 current_fields 中文里没有的身份、人数、服装、颜色、动作、剧情、光线、镜头或画风。',
+    '5. 不要参照、检索或模仿任何外部词库、词典或固定译法。',
+    '6. 同时给出可直接粘贴的 negative 英文与中文对照；不要和当前正面内容冲突。',
+    '',
+    '输出结构：',
+    '{"fields":{"person":{"en":"..."},"outfit":{"en":"..."},"pose":{"en":"..."},"scene":{"en":"..."},"light":{"en":"..."},"style":{"en":"..."}},"negative":{"zh":"中文对照","en":"low quality, blurry, watermark"},"notes":[]}'
   ].join('\n');
 
   const REASONS = {
-    disabled: '本地解析模型未开启，使用规则编译器',
     'empty-input': '没有可解析的想法文本',
+    'empty-fields': '本地模型没有返回任何可用的六个字段内容',
     config: 'API 根地址不是 http(s) 地址，无法请求本机模型',
     network: '连不上本地模型。可能是模型没开、电脑休眠、Tailscale 未连上，或跨域未放行',
     cors: '浏览器拦截了跨域请求，可能是 Ollama 的 CORS 未放行当前 Origin',
     timeout: '本地模型超时未返回，已中止这次请求',
-    aborted: '这次本地解析已中止',
+    aborted: '这次本地模型请求已中止',
     http: '本地模型返回了 HTTP 错误',
     server: '本地模型返回了错误信息',
     'invalid-json': '本地模型返回的不是有效 JSON',
-    'invalid-spec': '本地模型返回的 JSON 不符合场景结构，或包含原文没有的文字',
-    coverage: '本地模型漏掉或改写了原文片段',
-    negation: '本地模型把原文里的否定/禁止改成了肯定或漏掉了',
-    'empty-scene': '本地模型没有给出可用的场景内容',
-    conservation: '本地模型结果没有通过语义守恒检查',
-    unexpected: '本地解析出现未预期错误'
+    'invalid-spec': '本地模型返回的字段不完整或英文不可用',
+    'missing-english': '某些中文片段没有可用的英文',
+    inferred: '模型补全了未提示要素，但「允许模型推测」处于关闭状态',
+    'empty-negative': '本地模型没有给出可用的英文负面提示词',
+    'no-pending': '没有需要重新生成英文的字段',
+    'empty-current': '当前六个中文框都是空的，没有可重译内容',
+    unexpected: '本地模型请求出现未预期错误'
   };
+
+  const INFERRABLE = ['light', 'style'];
 
   function reasonText(code) {
     return REASONS[code] || REASONS.unexpected;
@@ -95,7 +170,7 @@
   }
 
   function defaultSettings() {
-    return { enabled: false, apiRoot: DEFAULT_API_ROOT, model: DEFAULT_MODEL };
+    return { apiRoot: DEFAULT_API_ROOT, model: DEFAULT_MODEL, infer: false };
   }
 
   function loadSettings(storage) {
@@ -106,9 +181,10 @@
       if (!raw) return out;
       const saved = JSON.parse(raw);
       if (!saved || typeof saved !== 'object') return out;
-      out.enabled = saved.enabled === true;
+      // 旧版存过 enabled:false；主流程现在固定使用本地模型，这个字段不再生效。
       if (typeof saved.apiRoot === 'string' && saved.apiRoot.trim()) out.apiRoot = normalizeApiRoot(saved.apiRoot);
       if (typeof saved.model === 'string' && saved.model.trim()) out.model = normalizeModel(saved.model);
+      out.infer = saved.infer === true;
     } catch (err) {
       return defaultSettings();
     }
@@ -119,9 +195,9 @@
     if (!storage) return false;
     try {
       storage.setItem(STORAGE_KEY, JSON.stringify({
-        enabled: !!(settings && settings.enabled),
         apiRoot: normalizeApiRoot(settings && settings.apiRoot),
-        model: normalizeModel(settings && settings.model)
+        model: normalizeModel(settings && settings.model),
+        infer: !!(settings && settings.infer)
       }));
       return true;
     } catch (err) {
@@ -129,7 +205,12 @@
     }
   }
 
-  function buildRequest(settings, idea) {
+  function buildSystemPrompt(options) {
+    const infer = !!(options && options.infer);
+    return BASE_PROMPT.concat(infer ? INFER_ON : INFER_OFF).join('\n');
+  }
+
+  function buildRequest(settings, systemPrompt, userContent) {
     const apiRoot = normalizeApiRoot(settings && settings.apiRoot);
     const model = normalizeModel(settings && settings.model);
     return {
@@ -139,21 +220,45 @@
       body: {
         model: model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: String(idea == null ? '' : idea) }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: String(userContent == null ? '' : userContent) }
         ],
         stream: false,
-        // Ollama 0.40 的字段；qwen3.5 模板不加这个会先吐 <think>，污染 JSON。
+        // qwen3.5 不加 think:false 会先吐 <think>，污染 JSON。
         think: false,
         format: 'json',
         options: {
           temperature: 0,
           top_p: 0.9,
           num_ctx: 4096,
-          num_predict: 1400
+          num_predict: 1800
         }
       }
     };
+  }
+
+  function buildGenerateRequest(settings, idea, options) {
+    return buildRequest(settings, buildSystemPrompt(options), String(idea == null ? '' : idea));
+  }
+
+  function buildRetranslateRequest(settings, payload) {
+    const data = payload || {};
+    const current = data.fields || {};
+    const pending = Array.isArray(data.pending) ? data.pending.slice() : [];
+    const user = {
+      original_idea: String(data.idea == null ? '' : data.idea),
+      pending: pending,
+      current_fields: {},
+      current_negative: data.negative || { zh: '', en: '' }
+    };
+    SLOTS.forEach(function (key) {
+      const field = current[key] || {};
+      user.current_fields[key] = {
+        zh: String(field.zh == null ? '' : field.zh),
+        en: String(field.en == null ? '' : field.en)
+      };
+    });
+    return buildRequest(settings, RETRANSLATE_PROMPT, JSON.stringify(user, null, 2));
   }
 
   function stripThinkAndFence(content) {
@@ -170,268 +275,325 @@
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start === -1 || end <= start) {
-      const error = new Error('没有找到 JSON 对象');
-      error.code = 'invalid-json';
-      throw error;
+      throw codedError('invalid-json', '没有找到 JSON 对象');
     }
     let parsed;
     try {
       parsed = JSON.parse(text.slice(start, end + 1));
     } catch (err) {
-      const error = new Error('JSON 解析失败');
-      error.code = 'invalid-json';
-      throw error;
+      throw codedError('invalid-json', 'JSON 解析失败');
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      const error = new Error('顶层不是 JSON 对象');
-      error.code = 'invalid-json';
-      throw error;
+      throw codedError('invalid-json', '顶层不是 JSON 对象');
     }
     return parsed;
   }
 
-  function isPlainObject(value) {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
+  function codedError(code, message, extra) {
+    const error = new Error(message || reasonText(code));
+    error.code = code;
+    if (extra) {
+      Object.keys(extra).forEach(function (key) { error[key] = extra[key]; });
+    }
+    return error;
   }
 
   function asText(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
 
-  // 收集模型声明用到的所有原文片段。只校验 text 类字段，不要求英文。
-  function collectAllSpans(spec) {
-    const spans = [];
-    function add(value) {
-      const text = asText(value).replace(/\s+/g, ' ');
-      if (!text) return;
-      if (spans.indexOf(text) === -1) spans.push(text);
-    }
-    function collectItem(item) {
-      if (!item || typeof item !== 'object') return;
-      add(item.text);
-      add(item.target);
-      add(item.exception);
-      add(item.color);
-      add(item.distance);
-      add(item.outfit_color);
-      if (Array.isArray(item.attributes)) item.attributes.forEach(add);
-    }
-    ['units', 'subjects', 'objects', 'outfits', 'relations', 'negations', 'scopes', 'exceptions']
-      .forEach(function (key) {
-        if (Array.isArray(spec[key])) spec[key].forEach(collectItem);
-      });
-    return spans;
+  function cleanEn(value) {
+    return U.cleanEnglish(asText(value));
   }
 
-  // 覆盖检查只认真正承载内容的片段：六框单元、实体、否定、例外。
-  // relation / scope 的 text 只是结构重述，不能拿来掩盖单元漏写。
-  function collectCoverageSpans(spec) {
-    const spans = [];
-    function add(value) {
-      const text = asText(value).replace(/\s+/g, ' ');
-      if (!text) return;
-      if (spans.indexOf(text) === -1) spans.push(text);
-    }
-    (Array.isArray(spec.units) ? spec.units : []).forEach(function (item) {
-      if (item && typeof item === 'object') add(item.text);
-    });
-    ['subjects', 'objects', 'outfits'].forEach(function (key) {
-      (Array.isArray(spec[key]) ? spec[key] : []).forEach(function (item) {
+  function usableEn(value) {
+    const text = cleanEn(value);
+    if (!text || U.hasCjk(text) || !U.hasLatin(text)) return '';
+    return text;
+  }
+
+  function normalizeKey(key) {
+    const text = String(key == null ? '' : key).trim();
+    if (!text) return '';
+    if (SLOTS.indexOf(text) !== -1) return text;
+    const lower = text.toLowerCase();
+    if (SLOT_ALIASES[lower]) return SLOT_ALIASES[lower];
+    if (SLOT_ALIASES[text]) return SLOT_ALIASES[text];
+    return '';
+  }
+
+  function fieldMap(data) {
+    const source = data && data.fields;
+    const out = Object.create(null);
+    if (Array.isArray(source)) {
+      source.forEach(function (item) {
         if (!item || typeof item !== 'object') return;
-        add(item.text);
-        add(item.color);
-        add(item.distance);
-        add(item.outfit_color);
-        if (Array.isArray(item.attributes)) item.attributes.forEach(add);
+        const key = normalizeKey(item.key || item.slot || item.name);
+        if (key) out[key] = item;
       });
-    });
-    (Array.isArray(spec.negations) ? spec.negations : []).forEach(function (item) {
-      if (!item || typeof item !== 'object') return;
-      add(item.text);
-      add(item.target);
-    });
-    (Array.isArray(spec.scopes) ? spec.scopes : []).forEach(function (item) {
-      if (!item || typeof item !== 'object') return;
-      add(item.target);
-      add(item.exception);
-      // 纯排除作用域可能没有单独的 negation 记录；它的整句就是约束内容。
-      const scopeText = asText(item.text);
-      if (scopeText && (item.polarity === 'exclude' ||
-          NEGATION_CUES.some(function (cue) { return scopeText.indexOf(cue) !== -1; }))) {
-        add(scopeText);
-      }
-    });
-    (Array.isArray(spec.exceptions) ? spec.exceptions : []).forEach(function (item) {
-      if (typeof item === 'string') add(item);
-      else if (item && typeof item === 'object') add(item.text || item.exception);
-    });
-    return spans;
+    } else if (source && typeof source === 'object') {
+      Object.keys(source).forEach(function (rawKey) {
+        const key = normalizeKey(rawKey);
+        if (key && source[rawKey] && typeof source[rawKey] === 'object') out[key] = source[rawKey];
+      });
+    } else {
+      SLOTS.forEach(function (key) {
+        if (data && data[key] && typeof data[key] === 'object') out[key] = data[key];
+      });
+    }
+    return out;
   }
 
-  const AUTO_COVERED = Object.create(null);
-  ('的了着过和与及或而并也都就还很更最把被给让使对为以于地得在是有可所其之此那这我你他她它们' +
-    '个位名件条双只张座片群套头身款种些点分一二两三几每各另穿戴着系围披除部分使用剩余外').split('').forEach(function (ch) {
-    AUTO_COVERED[ch] = true;
-  });
-
-  function isIgnorableChar(ch) {
-    return /[\s，,。.、；;：:！!？?（）()【】\[\]{}<>《》〈〉「」『』“”‘’"'…—\-·/\\|+*=&%#@~`^]/.test(ch) ||
-      !!AUTO_COVERED[ch];
+  function normalizeInferred(data) {
+    const raw = data && data.inferred;
+    if (!raw) return [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    const out = [];
+    list.forEach(function (item) {
+      const key = normalizeKey(item);
+      if (key && out.indexOf(key) === -1) out.push(key);
+    });
+    return out;
   }
 
-  function coverageGaps(spec, raw) {
-    const source = String(raw || '');
-    const covered = new Array(source.length);
-    const spans = collectCoverageSpans(spec).sort(function (a, b) { return b.length - a.length; });
-    spans.forEach(function (span) {
-      let index = source.indexOf(span);
-      while (index !== -1) {
-        for (let i = index; i < index + span.length; i += 1) covered[i] = true;
-        index = source.indexOf(span, index + 1);
+  function normalizeNotes(data) {
+    if (!data || !Array.isArray(data.notes)) return [];
+    return data.notes.slice(0, 12).map(function (item) { return asText(item); }).filter(Boolean);
+  }
+
+  function normalizeNegative(data) {
+    let source = data && data.negative;
+    if (typeof source === 'string') {
+      source = { zh: '', en: source };
+    } else if (!source || typeof source !== 'object') {
+      source = {
+        zh: data && (data.negative_zh || data.negativeZh),
+        en: data && (data.negative_en || data.negativeEn)
+      };
+    }
+    const en = usableEn(source && source.en);
+    if (!en) {
+      throw codedError('empty-negative', '没有可用的英文负面提示词');
+    }
+    return {
+      zh: asText(source && (source.zh || source.negative_zh)),
+      en: en
+    };
+  }
+
+  function normalizeInitial(data, options) {
+    const fields = fieldMap(data);
+    const inferred = normalizeInferred(data);
+    const inferEnabled = !!(options && options.infer);
+    const out = Object.create(null);
+    let contentCount = 0;
+    let inferredCount = 0;
+
+    SLOTS.forEach(function (key) {
+      const source = fields[key] || {};
+      const zh = asText(source.zh);
+      const en = cleanEn(source.en);
+      if (!zh && !en) {
+        out[key] = { zh: '', en: '', inferred: false };
+        return;
       }
+      contentCount += 1;
+      if (!zh) {
+        throw codedError('invalid-spec', SLOT_LABELS[key] + ' 只有英文，没有中文对照');
+      }
+      if (!usableEn(source.en)) {
+        throw codedError('missing-english', SLOT_LABELS[key] + ' 的中文缺少可用英文（' + zh + '）');
+      }
+      out[key] = { zh: zh, en: en, inferred: inferred.indexOf(key) !== -1 };
+      if (out[key].inferred) inferredCount += 1;
     });
-    const gaps = [];
-    let buffer = '';
-    for (let i = 0; i < source.length; i += 1) {
-      const ch = source[i];
-      if (covered[i] || isIgnorableChar(ch)) {
-        if (buffer) {
-          gaps.push(buffer);
-          buffer = '';
+
+    if (!contentCount) {
+      throw codedError('empty-fields', '六个字段都是空的');
+    }
+
+    if (inferred.length) {
+      inferred.forEach(function (key) {
+        if (INFERRABLE.indexOf(key) === -1) {
+          throw codedError('invalid-spec', '模型把「' + SLOT_LABELS[key] + '」标成了补全；只允许补光线/镜头和画风');
         }
-        continue;
+        if (!out[key] || !out[key].zh || !out[key].en) {
+          throw codedError('invalid-spec', '补全字段「' + SLOT_LABELS[key] + '」是空的');
+        }
+      });
+      if (!inferEnabled) {
+        throw codedError('inferred',
+          '模型补全了 ' + inferred.map(function (key) { return SLOT_LABELS[key]; }).join('、') +
+          '，但补全开关是关闭的。为了不把推测当成原文，这次结果没有采用。');
       }
-      buffer += ch;
-    }
-    if (buffer) gaps.push(buffer);
-    return gaps;
-  }
-
-  function inventedSpans(spec, raw) {
-    const source = String(raw || '');
-    return collectAllSpans(spec).filter(function (span) {
-      return source.indexOf(span) === -1;
-    });
-  }
-
-  const NEGATION_PRESERVED = /\b(no|not|without|prohibit(?:ed)?|forbid(?:den)?|banned|free of|avoid|never|none)\b/i;
-  const NEGATION_CUES = ['禁止', '严禁', '请勿', '切勿', '不要', '不能', '不可', '避免', '没有', '不含', '去除', '去掉', '排除', '勿'];
-
-  function splitClauses(text) {
-    return U.splitPhrases(text);
-  }
-
-  function clauseHasCue(clause) {
-    if (NEGATION_CUES.some(function (cue) { return clause.indexOf(cue) !== -1; })) return true;
-    return /(^|[，,。；;])\s*别/.test(clause);
-  }
-
-  function negationPreserved(clause, spec) {
-    const negations = Array.isArray(spec.negations) ? spec.negations : [];
-    if (negations.some(function (item) {
-      if (!item || typeof item !== 'object') return false;
-      const text = asText(item.text);
-      const target = asText(item.target);
-      return (text && clause.indexOf(text) !== -1) || (target && clause.indexOf(target) !== -1);
-    })) return true;
-
-    const scopes = Array.isArray(spec.scopes) ? spec.scopes : [];
-    if (scopes.some(function (item) {
-      if (!item || typeof item !== 'object' || item.polarity !== 'exclude') return false;
-      const text = asText(item.text);
-      const target = asText(item.target);
-      return (text && clause.indexOf(text) !== -1) || (target && clause.indexOf(target) !== -1);
-    })) return true;
-
-    // 告示牌类整句不一定要进 negations，但英文必须保留「禁止 / 请勿」。
-    return (Array.isArray(spec.units) ? spec.units : []).some(function (unit) {
-      if (!unit || typeof unit !== 'object') return false;
-      const text = asText(unit.text);
-      if (!text || clause.indexOf(text) === -1) return false;
-      const span = T2I.Scene && T2I.Scene.translateSpan
-        ? T2I.Scene.translateSpan(text, unit.slot || 'scene')
-        : { en: '' };
-      const en = String(span.en || '');
-      if (!en || /[\u3400-\u9fff]/.test(en)) return false;
-      return NEGATION_PRESERVED.test(en);
-    });
-  }
-
-  function validateSpec(spec, raw) {
-    if (!isPlainObject(spec)) {
-      return { ok: false, code: 'invalid-spec', message: '顶层不是 JSON 对象' };
-    }
-    if (!Array.isArray(spec.units)) {
-      return { ok: false, code: 'invalid-spec', message: '缺少 units 数组' };
-    }
-    if (spec.units.length > 80) {
-      return { ok: false, code: 'invalid-spec', message: 'units 过多（' + spec.units.length + ' 段）' };
-    }
-    for (let i = 0; i < spec.units.length; i += 1) {
-      const unit = spec.units[i];
-      if (!isPlainObject(unit)) {
-        return { ok: false, code: 'invalid-spec', message: 'units[' + i + '] 不是对象' };
-      }
-      const text = asText(unit.text);
-      if (!text) {
-        return { ok: false, code: 'invalid-spec', message: 'units[' + i + '] 缺少 text' };
-      }
-      if (SLOTS.indexOf(unit.slot) === -1) {
-        return { ok: false, code: 'invalid-spec', message: 'units[' + i + '] 的 slot 不合法：' + String(unit.slot) };
-      }
-    }
-
-    const arrayFields = ['negations', 'scopes', 'relations', 'subjects', 'objects', 'outfits', 'exceptions'];
-    for (let i = 0; i < arrayFields.length; i += 1) {
-      const key = arrayFields[i];
-      if (spec[key] != null && !Array.isArray(spec[key])) {
-        return { ok: false, code: 'invalid-spec', message: key + ' 必须是数组' };
-      }
-    }
-
-    const invented = inventedSpans(spec, raw);
-    if (invented.length) {
-      return {
-        ok: false,
-        code: 'invalid-spec',
-        message: '模型给出了原文没有的文字：' + invented.slice(0, 3).join('、')
-      };
-    }
-
-    const gaps = coverageGaps(spec, raw);
-    if (gaps.length) {
-      return {
-        ok: false,
-        code: 'coverage',
-        message: '模型漏掉或改写了原文：' + gaps.slice(0, 5).join('、')
-      };
-    }
-
-    const clauses = splitClauses(raw);
-    for (let i = 0; i < clauses.length; i += 1) {
-      const clause = clauses[i];
-      if (!clauseHasCue(clause)) continue;
-      if (!negationPreserved(clause, spec)) {
-        return {
-          ok: false,
-          code: 'negation',
-          message: '原文里的否定/禁止没有按原样保留：' + clause
-        };
-      }
-    }
-
-    const meaningful = (Array.isArray(spec.units) ? spec.units.length : 0) +
-      (Array.isArray(spec.negations) ? spec.negations.length : 0) +
-      (Array.isArray(spec.scopes) ? spec.scopes.length : 0);
-    if (!meaningful && asText(raw)) {
-      return { ok: false, code: 'empty-scene', message: 'units 与 negations 都是空的' };
     }
 
     return {
-      ok: true,
-      spans: collectCoverageSpans(spec).length,
-      unitCount: spec.units.length
+      fields: out,
+      negative: normalizeNegative(data),
+      inferred: inferred,
+      inferredCount: inferredCount,
+      notes: normalizeNotes(data)
     };
+  }
+
+  function normalizeRetranslation(data, pending, currentFields) {
+    const fields = fieldMap(data);
+    const out = Object.create(null);
+    const missing = [];
+    pending.forEach(function (key) {
+      const currentZh = asText(currentFields && currentFields[key] && currentFields[key].zh);
+      // 中文已被清空：这一项不再需要英文，允许返回空字符串。
+      if (!currentZh) {
+        out[key] = { en: '' };
+        return;
+      }
+      const source = fields[key];
+      const en = source ? usableEn(source.en) : '';
+      if (!en) {
+        missing.push(SLOT_LABELS[key] || key);
+        return;
+      }
+      out[key] = { en: en };
+    });
+    if (missing.length) {
+      throw codedError('missing-english', '重译结果缺少：' + missing.join('、'));
+    }
+    let negative = null;
+    if (data && data.negative) {
+      negative = normalizeNegative(data);
+    } else if (data && (data.negative_en || data.negativeEn)) {
+      negative = normalizeNegative(data);
+    }
+    return {
+      fields: out,
+      negative: negative,
+      notes: normalizeNotes(data)
+    };
+  }
+
+  function currentFieldPayload(fields) {
+    const out = Object.create(null);
+    SLOTS.forEach(function (key) {
+      const field = fields && fields[key] || {};
+      out[key] = {
+        zh: String(field.zh == null ? '' : field.zh),
+        en: String(field.en == null ? '' : field.en)
+      };
+    });
+    return out;
+  }
+
+  function snippet(text) {
+    return String(text == null ? '' : text).replace(/\s+/g, ' ').slice(0, 180);
+  }
+
+  function resolveFetch(options) {
+    return (options && options.fetchImpl) ||
+      (typeof window !== 'undefined' && typeof window.fetch === 'function' ? window.fetch.bind(window) :
+        (typeof fetch === 'function' ? fetch : null));
+  }
+
+  function runRequest(request, options, started) {
+    const opts = options || {};
+    return new Promise(function (resolve, reject) {
+      if (!/^https?:\/\//i.test(request.apiRoot)) {
+        reject(codedError('config'));
+        return;
+      }
+      const fetchImpl = resolveFetch(opts);
+      if (!fetchImpl) {
+        reject(codedError('network', '当前环境没有 fetch'));
+        return;
+      }
+
+      const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : TIMEOUT_MS;
+      let abortReason = '';
+      const controller = new AbortController();
+      const external = opts.signal;
+      let finished = false;
+
+      function cleanup() {
+        clearTimeout(timer);
+        if (external && typeof external.removeEventListener === 'function') {
+          external.removeEventListener('abort', onExternalAbort);
+        }
+      }
+      function onExternalAbort() {
+        abortReason = 'aborted';
+        try { controller.abort(); } catch (err) { /* 忽略 */ }
+      }
+      if (external) {
+        if (external.aborted) onExternalAbort();
+        else if (typeof external.addEventListener === 'function') external.addEventListener('abort', onExternalAbort);
+      }
+      const timer = setTimeout(function () {
+        abortReason = 'timeout';
+        try { controller.abort(); } catch (err) { /* 忽略 */ }
+      }, timeoutMs);
+
+      let requestPromise;
+      try {
+        requestPromise = fetchImpl(request.url, {
+          method: 'POST',
+          mode: 'cors',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request.body),
+          signal: controller.signal
+        });
+      } catch (fetchError) {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        reject(codedError('network', fetchError && fetchError.message ? fetchError.message : 'fetch 同步失败'));
+        return;
+      }
+      Promise.resolve(requestPromise).then(function (res) {
+        if (!res || typeof res !== 'object') {
+          throw codedError('network', '空的 fetch 响应');
+        }
+        if (!res.ok) {
+          const status = Number(res.status) || 0;
+          const code = status === 403 || status === 401 ? 'cors' : (status >= 500 ? 'server' : 'http');
+          throw codedError(code, 'HTTP ' + status, { status: status });
+        }
+        return Promise.resolve().then(function () { return res.json(); }).catch(function () {
+          throw codedError('invalid-json', 'HTTP 响应不是 JSON');
+        });
+      }).then(function (data) {
+        if (data && typeof data === 'object' && data.error) {
+          throw codedError('server', snippet(data.error));
+        }
+        const content = extractContent(data);
+        if (!content) {
+          throw codedError('invalid-json', '响应里没有 message.content');
+        }
+        if (finished) return;
+        finished = true;
+        cleanup();
+        resolve({ content: content, elapsedMs: Date.now() - started });
+      }).catch(function (err) {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        let code = err && err.code;
+        if (abortReason === 'timeout') code = 'timeout';
+        else if (abortReason === 'aborted') code = 'aborted';
+        if (!code || code === 'unexpected') {
+          if (err && (err.name === 'AbortError' || /abort/i.test(String(err.message || '')))) {
+            code = abortReason || 'timeout';
+          } else if (err instanceof TypeError || /fetch|network|load failed/i.test(String(err.message || ''))) {
+            code = 'network';
+          } else {
+            code = 'unexpected';
+          }
+        }
+        const error = codedError(code, err && err.message ? err.message : reasonText(code));
+        if (err && err.status) error.status = err.status;
+        reject(error);
+      });
+    });
   }
 
   function extractContent(data) {
@@ -453,202 +615,144 @@
     return '';
   }
 
-  function snippet(text) {
-    return String(text == null ? '' : text).replace(/\s+/g, ' ').slice(0, 180);
+  function failure(code, request, started, extra) {
+    const out = {
+      status: 'error',
+      requested: true,
+      code: code,
+      reason: reasonText(code),
+      elapsedMs: Date.now() - started,
+      model: request ? request.model : '',
+      endpoint: request ? request.url : ''
+    };
+    if (extra) {
+      Object.keys(extra).forEach(function (key) { out[key] = extra[key]; });
+    }
+    return out;
   }
 
-  function compile(settings, idea, options) {
+  function generate(settings, idea, options) {
     const opts = options || {};
     const started = Date.now();
     const raw = U.normalizeSpace(idea);
-
-    if (!settings || settings.enabled !== true) {
-      return Promise.resolve({
-        status: 'disabled',
-        requested: false,
-        code: 'disabled',
-        reason: reasonText('disabled'),
-        elapsedMs: 0
-      });
-    }
-
     if (!raw) {
       return Promise.resolve({
-        status: 'fallback',
+        status: 'error',
         requested: false,
         code: 'empty-input',
         reason: reasonText('empty-input'),
-        elapsedMs: Date.now() - started
+        elapsedMs: 0
       });
     }
-
-    const request = buildRequest(settings, raw);
-    const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : TIMEOUT_MS;
-    const fetchImpl = opts.fetchImpl ||
-      (typeof window !== 'undefined' && typeof window.fetch === 'function' ? window.fetch.bind(window) :
-        (typeof fetch === 'function' ? fetch : null));
-
-    function fallback(code, extra) {
-      const out = {
-        status: 'fallback',
-        requested: true,
-        code: code,
-        reason: reasonText(code),
-        elapsedMs: Date.now() - started,
-        model: request.model,
-        endpoint: request.url
-      };
-      if (extra) {
-        Object.keys(extra).forEach(function (key) { out[key] = extra[key]; });
-      }
-      return out;
-    }
-
-    if (!/^https?:\/\//i.test(request.apiRoot)) {
-      return Promise.resolve(fallback('config'));
-    }
-    if (!fetchImpl) {
-      return Promise.resolve(fallback('network', { detail: '当前环境没有 fetch' }));
-    }
-
-    let abortReason = '';
-    const controller = new AbortController();
-    const external = opts.signal;
-    function onExternalAbort() {
-      abortReason = 'aborted';
-      controller.abort();
-    }
-    if (external) {
-      if (external.aborted) onExternalAbort();
-      else if (typeof external.addEventListener === 'function') external.addEventListener('abort', onExternalAbort);
-    }
-    const timer = setTimeout(function () {
-      abortReason = 'timeout';
-      controller.abort();
-    }, timeoutMs);
-
-    return Promise.resolve()
-      .then(function () {
-        return fetchImpl(request.url, {
-          method: 'POST',
-          mode: 'cors',
-          credentials: 'omit',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request.body),
-          signal: controller.signal
+    const infer = opts.infer === undefined ? !!(settings && settings.infer) : !!opts.infer;
+    const request = buildGenerateRequest(settings, raw, { infer: infer });
+    return runRequest(request, opts, started).then(function (response) {
+      let data;
+      try {
+        data = parseModelContent(response.content);
+      } catch (err) {
+        throw codedError('invalid-json', '返回内容不是有效 JSON', {
+          detail: snippet(response.content)
         });
-      })
-      .then(function (res) {
-        if (!res || typeof res !== 'object') {
-          throw Object.assign(new Error('空的 fetch 响应'), { code: 'network' });
-        }
-        if (!res.ok) {
-          const status = Number(res.status) || 0;
-          const code = status === 403 || status === 401 ? 'cors' : (status >= 500 ? 'server' : 'http');
-          throw Object.assign(new Error('HTTP ' + status), { code: code, status: status });
-        }
-        return res.json();
-      })
-      .then(function (data) {
-        if (data && typeof data === 'object' && data.error) {
-          throw Object.assign(new Error(snippet(data.error)), { code: 'server' });
-        }
-        const content = extractContent(data);
-        if (!content) {
-          throw Object.assign(new Error('响应里没有 message.content'), { code: 'invalid-json' });
-        }
-        let spec;
-        try {
-          spec = parseModelContent(content);
-        } catch (err) {
-          throw Object.assign(new Error('返回内容不是有效 JSON'), {
-            code: 'invalid-json',
-            detail: snippet(content)
-          });
-        }
-        const validation = validateSpec(spec, raw);
-        if (!validation.ok) {
-          throw Object.assign(new Error(validation.message), {
-            code: validation.code,
-            validation: validation
-          });
-        }
-        let scene;
-        try {
-          scene = T2I.Scene.fromSpec(spec, raw);
-        } catch (err) {
-          throw Object.assign(new Error('场景树构建失败：' + snippet(err && err.message)), { code: 'invalid-spec' });
-        }
-        if (!scene || (!scene.units.length && !scene.negations.length && !scene.scopes.length)) {
-          throw Object.assign(new Error('场景树是空的'), { code: 'empty-scene' });
-        }
-
-        // 用与界面完全相同的六框 / 组装 / 负面 / 守恒链路预检一次。
-        const parsed = { raw: raw, scene: scene, segments: [] };
-        const filled = T2I.SlotFill.fill(parsed);
-        const completed = T2I.Complete.complete(filled.slots, { enabled: opts.completion === true });
-        const assembled = T2I.Assemble.assemble(completed.slots, { quality: opts.quality === true });
-        const negative = T2I.Negative.build(assembled.positiveEn, T2I.Scene.negativePlan(scene));
-        const verify = T2I.Scene.verify(scene, completed.slots, assembled, negative);
-        const errors = (verify.issues || []).filter(function (issue) { return issue.severity === 'error'; });
-        if (errors.length) {
-          throw Object.assign(new Error(errors[0].message), {
-            code: 'conservation',
-            issue: errors[0],
-            verify: verify
-          });
-        }
-
-        return {
-          status: 'ok',
-          requested: true,
-          code: 'ok',
-          reason: '本地解析完成',
-          raw: raw,
-          spec: spec,
-          scene: scene,
-          parsed: parsed,
-          slots: completed.slots,
-          assembled: assembled,
-          negative: negative,
-          verify: verify,
-          model: request.model,
-          endpoint: request.url,
-          elapsedMs: Date.now() - started,
-          validation: validation
-        };
-      })
-      .catch(function (err) {
-        const originalCode = err && err.code;
-        let code = originalCode;
-        if (!code || code === 'unexpected') {
-          if (abortReason === 'timeout') code = 'timeout';
-          else if (abortReason === 'aborted') code = 'aborted';
-          else if (err && (err.name === 'AbortError' || /abort/i.test(String(err.message || '')))) {
-            code = abortReason || 'timeout';
-          } else if (err instanceof TypeError || /fetch|network|load failed/i.test(String(err.message || ''))) {
-            code = 'network';
-          } else {
-            code = 'unexpected';
-          }
-        }
-        if (abortReason === 'timeout') code = 'timeout';
-        else if (abortReason === 'aborted') code = 'aborted';
-        const out = fallback(code);
-        if (err && err.message) out.detail = snippet(err.message);
-        if (err && err.status) out.httpStatus = err.status;
-        if (err && err.validation) out.validation = err.validation;
-        if (err && err.verify) out.verify = err.verify;
-        out.elapsedMs = Date.now() - started;
-        return out;
-      })
-      .then(function (result) {
-        clearTimeout(timer);
-        if (external && typeof external.removeEventListener === 'function') {
-          external.removeEventListener('abort', onExternalAbort);
-        }
-        return result;
+      }
+      let normalized;
+      try {
+        normalized = normalizeInitial(data, { infer: infer });
+      } catch (err) {
+        throw err;
+      }
+      return {
+        status: 'ok',
+        requested: true,
+        code: 'ok',
+        reason: '本地模型拆解与翻译完成',
+        raw: raw,
+        fields: normalized.fields,
+        negative: normalized.negative,
+        inferred: normalized.inferred,
+        inferredCount: normalized.inferredCount,
+        notes: normalized.notes,
+        model: request.model,
+        endpoint: request.url,
+        elapsedMs: Date.now() - started,
+        inferRequested: infer
+      };
+    }).catch(function (err) {
+      const code = (err && err.code) || 'unexpected';
+      return failure(code, request, started, {
+        detail: err && err.message ? snippet(err.message) : '',
+        missing: err && err.missing ? err.missing : undefined
       });
+    });
+  }
+
+  function retranslate(settings, payload, options) {
+    const opts = options || {};
+    const started = Date.now();
+    const data = payload || {};
+    const fields = currentFieldPayload(data.fields);
+    const pending = (Array.isArray(data.pending) ? data.pending : [])
+      .map(normalizeKey)
+      .filter(function (key) { return !!key; });
+    if (!pending.length) {
+      return Promise.resolve({
+        status: 'error',
+        requested: false,
+        code: 'no-pending',
+        reason: reasonText('no-pending'),
+        elapsedMs: 0
+      });
+    }
+    const hasChinese = SLOTS.some(function (key) { return !!asText(fields[key].zh); });
+    if (!hasChinese) {
+      return Promise.resolve({
+        status: 'error',
+        requested: false,
+        code: 'empty-current',
+        reason: reasonText('empty-current'),
+        elapsedMs: 0
+      });
+    }
+    const request = buildRetranslateRequest(settings, {
+      idea: data.idea,
+      fields: fields,
+      pending: pending,
+      negative: data.negative
+    });
+    return runRequest(request, opts, started).then(function (response) {
+      let parsed;
+      try {
+        parsed = parseModelContent(response.content);
+      } catch (err) {
+        throw codedError('invalid-json', '返回内容不是有效 JSON', {
+          detail: snippet(response.content)
+        });
+      }
+      const normalized = normalizeRetranslation(parsed, pending, fields);
+      return {
+        status: 'ok',
+        requested: true,
+        code: 'ok',
+        reason: '英文重译完成',
+        pending: pending,
+        fields: normalized.fields,
+        negative: normalized.negative,
+        notes: normalized.notes,
+        model: request.model,
+        endpoint: request.url,
+        elapsedMs: Date.now() - started
+      };
+    }).catch(function (err) {
+      const code = (err && err.code) || 'unexpected';
+      return failure(code, request, started, {
+        detail: err && err.message ? snippet(err.message) : ''
+      });
+    });
+  }
+
+  // 兼容旧调用名：compile 现在也绝不返回 fallback；失败即 error。
+  function compile(settings, idea, options) {
+    return generate(settings, idea, options);
   }
 
   T2I.LocalLLM = {
@@ -656,16 +760,22 @@
     DEFAULT_MODEL: DEFAULT_MODEL,
     STORAGE_KEY: STORAGE_KEY,
     TIMEOUT_MS: TIMEOUT_MS,
-    SYSTEM_PROMPT: SYSTEM_PROMPT,
+    SLOTS: SLOTS,
+    SLOT_LABELS: SLOT_LABELS,
     defaultSettings: defaultSettings,
     loadSettings: loadSettings,
     saveSettings: saveSettings,
     normalizeApiRoot: normalizeApiRoot,
     normalizeModel: normalizeModel,
+    buildSystemPrompt: buildSystemPrompt,
     buildRequest: buildRequest,
+    buildGenerateRequest: buildGenerateRequest,
+    buildRetranslateRequest: buildRetranslateRequest,
     parseModelContent: parseModelContent,
-    validateSpec: validateSpec,
-    coverageGaps: coverageGaps,
+    normalizeInitial: normalizeInitial,
+    normalizeRetranslation: normalizeRetranslation,
+    generate: generate,
+    retranslate: retranslate,
     compile: compile,
     reasonText: reasonText
   };

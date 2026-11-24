@@ -20,6 +20,11 @@
 
   function complete(slots, options) {
     const added = [];
+    // 本地模型成功路径由模型自己分解并翻译，不再用规则补全加词。
+    if (slots && slots.__scene && slots.__scene.englishFrom === 'model') {
+      SF.refreshText(slots);
+      return { slots: slots, added: added };
+    }
     // 默认关闭：用户没提光线 / 镜头 / 画风时不再自动补。只有界面显式勾选
     // 「允许规则补全」并传入 { enabled: true } 才运行。
     if (!options || options.enabled !== true) {

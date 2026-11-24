@@ -1757,7 +1757,9 @@
   }
 
   function finalizeScene(scene, source) {
-    normalizeFallbackUnits(scene);
+    // 本地模型成功路径的英文只来自规格，不从词库补、也不拆 fallback 单元。
+    const modelEnglishOnly = scene.englishFrom === 'model';
+    if (!modelEnglishOnly) normalizeFallbackUnits(scene);
     scene.unknown = unknownFromUnits(scene.units);
     // 明显没有被任何结构覆盖的未知中文也要提示，不能因为分词边被标记就消失。
     scene.segmentation.tokens.forEach(function (token) {
@@ -1783,7 +1785,7 @@
         (declaredUnknown.indexOf(item) !== -1 || !coveredByStructure(scene, item, pool));
     });
     scene.units.forEach(function (unit) {
-      if (!unit.en && unit.zh) unit.en = unit.zh;
+      if (!unit.en && unit.zh && !modelEnglishOnly) unit.en = unit.zh;
       if (!hasCjk(unit.en)) return;
       const already = scene.unknown.some(function (item) { return unit.en.indexOf(item) !== -1; });
       if (!already) scene.unknown.push(unit.en);
@@ -2042,7 +2044,10 @@
     (scene.objects || []).forEach(function (object) {
       if (!object.color || !object.en) return;
       const color = String(object.color.en);
-      const base = String(object.en).replace(new RegExp('^' + escapeRegExp(color) + '\\s+', 'i'), '').trim();
+      let base = String(object.en).trim();
+      // 模型会给完整名词短语（a blue car），比较时允许冠词和颜色前缀。
+      base = base.replace(/^(?:a|an|the)\s+/i, '')
+        .replace(new RegExp('^' + escapeRegExp(color) + '\\s+', 'i'), '').trim();
       if (!base) return;
       const re = new RegExp('\\b' + escapeRegExp(color) + '\\s+(?:[a-z-]+\\s+){0,2}?' + escapeRegExp(base), 'i');
       if (!re.test(positive)) {
@@ -2056,30 +2061,35 @@
       if (!subject.outfitColor) return;
       const color = String(subject.outfitColor.en);
       const re = new RegExp('\\b(?:wearing|in|dressed in)\\s+(?:[a-z-]+\\s+){0,2}?' + escapeRegExp(color) + '\\b', 'i');
-      const alt = new RegExp('\\b' + escapeRegExp(color) + '\\s+(?:clothes|clothing|outfit|dress|shirt|coat|jacket)\\b', 'i');
+      const alt = new RegExp('\\b' + escapeRegExp(color) +
+        '\\s+(?:[a-z-]+\\s+){0,2}?(?:clothes|clothing|outfit|dress|shirt|coat|jacket)\\b', 'i');
       if (!re.test(positive) && !alt.test(positive)) {
         add('COLOR_BINDING', 'error',
           '衣服颜色没有和穿着关系绑定：' + subject.outfitColor.zh, color);
       }
     });
     // 明显的错绑：颜色 + 人物名词，但场景里该人物没有这个颜色。
-    const allColors = [];
-    (L.byCategory.color || []).forEach(function (entry) {
-      entry.enAliases.forEach(function (en) { if (allColors.indexOf(en) === -1) allColors.push(en); });
-    });
-    const personNouns = ['woman', 'man', 'girl', 'boy', 'person', 'people', 'child', 'lady', 'gentleman'];
-    personNouns.forEach(function (noun) {
-      allColors.forEach(function (color) {
-        if (color.indexOf(' ') !== -1) return;
-        const re = new RegExp('\\b' + escapeRegExp(color) + '\\s+' + escapeRegExp(noun) + '\\b', 'i');
-        if (!re.test(positive)) return;
-        const valid = colorPairs.some(function (pair) {
-          return pair.target === 'outfit' && hasWord(pair.color.en, color) &&
-            scene.subjects.some(function (s) { return hasWord(s.en, noun); });
-        });
-        if (!valid) add('COLOR_MISBIND', 'error', '颜色可能绑错对象：' + color + ' ' + noun, color + ' ' + noun);
+    // 本地模型成功路径不再读词库颜色表；本地来源的颜色绑定已由上面的
+    // colorPairs / object.color 检查覆盖。
+    if (scene.englishFrom !== 'model') {
+      const allColors = [];
+      (L.byCategory.color || []).forEach(function (entry) {
+        entry.enAliases.forEach(function (en) { if (allColors.indexOf(en) === -1) allColors.push(en); });
       });
-    });
+      const personNouns = ['woman', 'man', 'girl', 'boy', 'person', 'people', 'child', 'lady', 'gentleman'];
+      personNouns.forEach(function (noun) {
+        allColors.forEach(function (color) {
+          if (color.indexOf(' ') !== -1) return;
+          const re = new RegExp('\\b' + escapeRegExp(color) + '\\s+' + escapeRegExp(noun) + '\\b', 'i');
+          if (!re.test(positive)) return;
+          const valid = colorPairs.some(function (pair) {
+            return pair.target === 'outfit' && hasWord(pair.color.en, color) &&
+              scene.subjects.some(function (s) { return hasWord(s.en, noun); });
+          });
+          if (!valid) add('COLOR_MISBIND', 'error', '颜色可能绑错对象：' + color + ' ' + noun, color + ' ' + noun);
+        });
+      });
+    }
 
     // 5. 关系不能丢
     (scene.relations || []).forEach(function (relation) {
@@ -2142,6 +2152,503 @@
   }
 
   // ── 本地模型结果的场景接入 ──────────────────────────────────
+  // 本地模型成功时，英文只来自规格里的 en / *_en；这里不调用 Translator、
+  // 不调用 parseSubjectPhrase / parseOutfitPhrase / parseObjectPhrase，也不
+  // 读词库颜色表。规则编译器仍走 compile()，继续使用词库。
+
+  function specEnglishValue(value) {
+    if (typeof value !== 'string') return '';
+    const text = value.trim();
+    if (!text || hasCjk(text) || !/[A-Za-z]/.test(text)) return '';
+    return U.cleanEnglish(text);
+  }
+
+  function specTextOf(value) {
+    if (value && typeof value === 'object') return cleanText(value.text || value.zh || '');
+    return cleanText(value);
+  }
+
+  function specPair(value, enValue) {
+    const text = specTextOf(value);
+    let en = '';
+    if (value && typeof value === 'object') en = specEnglishValue(value.en);
+    if (!en) en = specEnglishValue(enValue);
+    if (!en && text && !hasCjk(text)) en = specEnglishValue(text);
+    if (!text && !en) return null;
+    return { zh: text || en, en: en, alias: text || en, category: 'spec' };
+  }
+
+  function specColorPair(value, enValue) {
+    const pair = specPair(value, enValue);
+    if (pair) pair.category = 'color';
+    return pair;
+  }
+
+  function specAttributes(value) {
+    const out = [];
+    (Array.isArray(value) ? value : []).forEach(function (item) {
+      const pair = specPair(item, item && typeof item === 'object' ? item.en : '');
+      if (!pair) return;
+      const key = (pair.zh + '|' + pair.en).toLowerCase();
+      if (out.some(function (x) { return (x.zh + '|' + x.en).toLowerCase() === key; })) return;
+      out.push({ zh: pair.zh, en: pair.en, kind: 'spec' });
+    });
+    return out;
+  }
+
+  function specAsciiCategory(value, fallback) {
+    const text = cleanText(value);
+    return text && /^[a-z][a-z0-9_-]*$/i.test(text) ? text : fallback;
+  }
+
+  function specUnitLocal(item, slot, role) {
+    const text = cleanText(item && item.text);
+    if (!text) return null;
+    const key = SLOTS.indexOf(slot) !== -1 ? slot : 'scene';
+    let en = specEnglishValue(item && item.en);
+    if (!en && !hasCjk(text)) en = specEnglishValue(text);
+    return makeUnit(key, text, en, text, specAsciiCategory(item && item.category, ''), {
+      source: 'local-llm',
+      role: role || '',
+      matches: [],
+      unknown: []
+    });
+  }
+
+  function specSubjectLocal(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const color = specPair(item.outfit_color, item.outfit_color_en);
+    return {
+      id: nextId('s'),
+      zh: text,
+      en: specEnglishValue(item.en),
+      category: specAsciiCategory(item.category, 'subject'),
+      attributes: specAttributes(item.attributes),
+      outfitColor: null,
+      outfitColorText: color ? color.zh : '',
+      outfitColorEn: color ? color.en : '',
+      text: text
+    };
+  }
+
+  function specOutfitLocal(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const color = specColorPair(item.color, item.color_en);
+    return {
+      id: nextId('c'),
+      ownerId: '',
+      ownerText: item.owner ? cleanText(item.owner) : '',
+      zh: text,
+      en: specEnglishValue(item.en),
+      color: color,
+      attributes: specAttributes(item.attributes),
+      text: text
+    };
+  }
+
+  function specObjectLocal(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const color = specColorPair(item.color, item.color_en);
+    return {
+      id: nextId('o'),
+      zh: text,
+      en: specEnglishValue(item.en),
+      category: specAsciiCategory(item.category, 'object'),
+      color: color,
+      distance: cleanText(item.distance),
+      distanceEn: specEnglishValue(item.distance_en),
+      attributes: specAttributes(item.attributes),
+      text: text
+    };
+  }
+
+  // 否定目标只从规格的 target_en / en / targets 来，不查词库，也不把
+  // 「文字」自动扩成 text / logo。多个英文概念可用逗号或斜杠分隔。
+  function strictTargets(item, target) {
+    const out = [];
+    function push(en, expandedFrom) {
+      const text = specEnglishValue(en);
+      if (!text) return;
+      text.split(/\s*,\s*|\s*\/\s*|\s+and\s+/i).forEach(function (part) {
+        const clean = U.cleanEnglish(part);
+        if (!clean || hasCjk(clean)) return;
+        if (out.some(function (x) { return x.en.toLowerCase() === clean.toLowerCase(); })) return;
+        out.push({ zh: target, en: clean, category: '', expandedFrom: expandedFrom || '' });
+      });
+    }
+    if (item && Array.isArray(item.targets)) {
+      item.targets.forEach(function (entry) {
+        if (typeof entry === 'string') push(entry, '');
+        else if (entry && typeof entry === 'object') push(entry.en || entry.target_en, target);
+      });
+    }
+    if (!out.length && item) {
+      push(item.target_en || item.en, '');
+      if (!out.length && !hasCjk(target)) push(target, '');
+    }
+    if (!out.length) out.push({ zh: target, en: '', category: '', unresolved: true });
+    return out;
+  }
+
+  function specTopicLocal(item, scope) {
+    const zh = cleanText(item && item.topic);
+    let en = specEnglishValue(item && item.topic_en);
+    if (!en) {
+      if (scope === 'subject') en = 'person';
+      else if (scope === 'background') en = 'background';
+      else if (scope === 'all') en = 'everything';
+    }
+    return {
+      zh: zh || (scope === 'subject' ? '人物' : ''),
+      en: en
+    };
+  }
+
+  function specExceptionLocal(item) {
+    const value = item && item.exception;
+    if (value && typeof value === 'object') {
+      const zh = specTextOf(value);
+      return { zh: zh, en: specEnglishValue(value.en) };
+    }
+    const zh = cleanText(value);
+    return { zh: zh, en: specEnglishValue(item && item.exception_en) };
+  }
+
+  function fromSpecLocal(spec, raw) {
+    const source = U.normalizeSpace(raw);
+    const scene = emptyScene(source);
+    scene.structured = true;
+    scene.origin = 'local-llm';
+    scene.englishFrom = 'model';
+    scene.specNotes = Array.isArray(spec && spec.notes) ? spec.notes.slice(0, 20).map(String) : [];
+    const data = spec || {};
+    idCounter = 0;
+
+    const unitSeen = Object.create(null);
+    function addUnit(unit) {
+      if (!unit) return;
+      const key = unit.slot + '|' + (unit.en || '').toLowerCase() + '|' + (unit.text || '');
+      if (unitSeen[key]) return;
+      unitSeen[key] = true;
+      scene.units.push(unit);
+    }
+
+    // 1. units：中文原文 + 模型英文，不做任何词库补译。
+    (Array.isArray(data.units) ? data.units : []).forEach(function (item) {
+      if (!item || typeof item.text !== 'string') return;
+      const text = cleanText(item.text);
+      if (!text) return;
+      const slot = SLOTS.indexOf(item.slot) !== -1 ? item.slot : 'scene';
+      const role = typeof item.role === 'string' ? item.role : '';
+      addUnit(specUnitLocal(item, slot, role));
+    });
+
+    // 2. 模型显式给出的主体 / 服装 / 物体。
+    (Array.isArray(data.subjects) ? data.subjects : []).forEach(function (item) {
+      const subject = specSubjectLocal(item);
+      if (!subject) return;
+      if (scene.subjects.some(function (s) { return textOverlaps(s.text || s.zh, subject.text); })) return;
+      scene.subjects.push(subject);
+    });
+    (Array.isArray(data.outfits) ? data.outfits : []).forEach(function (item) {
+      const outfit = specOutfitLocal(item);
+      if (!outfit) return;
+      if (scene.outfits.some(function (o) { return textOverlaps(o.text || o.zh, outfit.text); })) return;
+      scene.outfits.push(outfit);
+    });
+    (Array.isArray(data.objects) ? data.objects : []).forEach(function (item) {
+      const object = specObjectLocal(item);
+      if (!object) return;
+      if (scene.objects.some(function (o) { return textOverlaps(o.text || o.zh, object.text); })) return;
+      scene.objects.push(object);
+    });
+
+    // 3. 把单元和实体连起来。缺失的一方只从另一方的模型英文补齐，
+    // 没有 en 就留空，绝不回退到词库。
+    scene.subjects.forEach(function (subject) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'person' && textOverlaps(u.text, subject.text || subject.zh);
+      });
+      if (unit) {
+        unit.entityId = subject.id;
+        if (!unit.en && subject.en) unit.en = subject.en;
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, subject.text || subject.zh); })) {
+        scene.units.push(makeUnit('person', subject.zh, subject.en, subject.text || subject.zh, 'subject', {
+          source: 'local-llm', role: 'subject', entityId: subject.id
+        }));
+      }
+    });
+    scene.outfits.forEach(function (outfit) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'outfit' && textOverlaps(u.text, outfit.text || outfit.zh);
+      });
+      if (unit) {
+        unit.entityId = outfit.id;
+        if (!unit.en && outfit.en) unit.en = outfit.en;
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, outfit.text || outfit.zh); })) {
+        scene.units.push(makeUnit('outfit', outfit.zh, outfit.en, outfit.text || outfit.zh, 'outfit', {
+          source: 'local-llm', role: 'outfit', entityId: outfit.id
+        }));
+      }
+    });
+    scene.objects.forEach(function (object) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'scene' && u.role === 'object' && textOverlaps(u.text, object.text || object.zh);
+      });
+      if (unit) {
+        unit.entityId = object.id;
+        if (!unit.en && object.en) unit.en = object.en;
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, object.text || object.zh); })) {
+        scene.units.push(makeUnit('scene', object.zh, object.en, object.text || object.zh, object.category || 'object', {
+          source: 'local-llm', role: 'object', entityId: object.id
+        }));
+      }
+    });
+
+    // 单元没写实体数组时，用单元自己的模型英文补出实体，仍然不查词库。
+    scene.units.forEach(function (unit) {
+      if (unit.slot === 'person' && !scene.subjects.some(function (s) { return textOverlaps(unit.text, s.text || s.zh); })) {
+        const subject = specSubjectLocal({ text: unit.text, en: unit.en });
+        if (subject) {
+          subject.en = unit.en || subject.en;
+          scene.subjects.push(subject);
+          unit.entityId = subject.id;
+        }
+      }
+      if (unit.slot === 'outfit' && !scene.outfits.some(function (o) { return textOverlaps(unit.text, o.text || o.zh); })) {
+        const outfit = specOutfitLocal({ text: unit.text, en: unit.en });
+        if (outfit) {
+          outfit.en = unit.en || outfit.en;
+          scene.outfits.push(outfit);
+          unit.entityId = outfit.id;
+        }
+      }
+      if (unit.slot === 'scene' && unit.role === 'object' &&
+          !scene.objects.some(function (o) { return textOverlaps(unit.text, o.text || o.zh); })) {
+        const object = specObjectLocal({ text: unit.text, en: unit.en });
+        if (object) {
+          object.en = unit.en || object.en;
+          scene.objects.push(object);
+          unit.entityId = object.id;
+        }
+      }
+    });
+
+    // 4. 服装归属与主体衣服颜色。
+    scene.outfits.forEach(function (outfit) {
+      let owner = null;
+      if (outfit.ownerText) {
+        owner = scene.subjects.find(function (s) { return textOverlaps(outfit.ownerText, s.text || s.zh); }) || null;
+      }
+      if (!owner && scene.subjects.length === 1) owner = scene.subjects[0];
+      if (owner) outfit.ownerId = owner.id;
+    });
+    scene.subjects.forEach(function (subject) {
+      if (!subject.outfitColorText) return;
+      const match = scene.outfits.find(function (outfit) {
+        return outfit.color && (outfit.color.zh === subject.outfitColorText ||
+          textOverlaps(outfit.text || outfit.zh, subject.outfitColorText));
+      });
+      if (match && match.color) subject.outfitColor = match.color;
+      else if (subject.outfitColorEn) {
+        subject.outfitColor = {
+          zh: subject.outfitColorText,
+          en: subject.outfitColorEn,
+          alias: subject.outfitColorText,
+          category: 'color'
+        };
+      }
+      delete subject.outfitColorText;
+      delete subject.outfitColorEn;
+    });
+
+    // 5. 动作：以姿态单元为准。
+    scene.units.forEach(function (unit) {
+      if (unit.slot !== 'pose') return;
+      const actor = scene.subjects.find(function (s) { return textOverlaps(unit.text, s.text || s.zh); }) ||
+        scene.subjects[0] || null;
+      scene.actions.push({
+        id: nextId('a'),
+        subjectId: actor ? actor.id : '',
+        zh: unit.zh,
+        en: unit.en,
+        type: 'pose',
+        targetId: ''
+      });
+    });
+
+    // 6. 关系：verify / en 只来自规格或对应实体的模型英文。
+    const relationSeen = Object.create(null);
+    (Array.isArray(data.relations) ? data.relations : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const type = cleanText(item.type) || 'other';
+      const text = cleanText(item.text || '');
+      const from = cleanText(item.from || '');
+      const to = cleanText(item.to || '');
+      if (!text && !to && !from) return;
+      const subject = from ? scene.subjects.find(function (s) { return textOverlaps(from, s.text || s.zh); }) : scene.subjects[0];
+      const object = to ? scene.objects.find(function (o) { return textOverlaps(to, o.text || o.zh); }) : null;
+      const outfit = to ? scene.outfits.find(function (o) { return textOverlaps(to, o.text || o.zh); }) : null;
+      const en = specEnglishValue(item.en) || specEnglishValue(item.target_en);
+      let verify = specEnglishValue(item.verify) || en;
+      if (!verify && type === 'wearing' && outfit) verify = outfit.en;
+      else if (!verify && object) verify = object.en;
+      const key = type + '|' + (verify || '').toLowerCase() + '|' + text;
+      if (relationSeen[key]) return;
+      relationSeen[key] = true;
+      scene.relations.push({
+        type: type,
+        subjectId: subject ? subject.id : '',
+        objectId: object ? object.id : '',
+        outfitId: outfit ? outfit.id : '',
+        zh: text || (from + to),
+        en: en || verify,
+        verify: verify
+      });
+    });
+
+    // 7. 否定与作用范围。target_en / en 缺失时 validation 已回退；这里
+    // 绝不用 conceptTranslation 或词库补概念。
+    function ensurePersonSubject() {
+      if (scene.subjects.length) return;
+      const subject = {
+        id: nextId('s'), zh: '人物', en: 'a person', category: 'subject',
+        attributes: [], outfitColor: null, text: '人物'
+      };
+      scene.subjects.push(subject);
+      scene.units.unshift(makeUnit('person', '人物', 'a person', '人物', 'subject', {
+        source: 'local-llm', role: 'subject', entityId: subject.id
+      }));
+    }
+
+    function addNegationLocal(item) {
+      if (!item) return;
+      const rawTarget = normalizeSpecTarget(item.target || item.text || '');
+      if (!rawTarget) return;
+      const targets = strictTargets(item, rawTarget);
+      if (!targets.length) return;
+      const scope = normalizeSpecScope(item.scope || item.topic || '');
+      const topicInfo = specTopicLocal(item, scope);
+      if (scope === 'subject') ensurePersonSubject();
+      scene.negations.push({
+        text: cleanText(item.text || rawTarget),
+        topic: topicInfo.zh || (scope === 'subject' ? '人物' : ''),
+        topicEn: topicInfo.en,
+        scope: scope,
+        targets: targets,
+        rawTarget: rawTarget,
+        negated: true
+      });
+      scene.scopes.push({
+        scope: scope,
+        topic: topicInfo.zh,
+        topicEn: topicInfo.en,
+        target: rawTarget,
+        targets: targets,
+        polarity: 'exclude',
+        exception: '',
+        exceptionEn: ''
+      });
+    }
+    (Array.isArray(data.negations) ? data.negations : []).forEach(function (item) {
+      if (typeof item === 'string') addNegationLocal({ text: item, target: item });
+      else addNegationLocal(item);
+    });
+
+    function addExceptionLocal(text, en) {
+      const zh = cleanText(text);
+      const enText = specEnglishValue(en);
+      if (!zh && !enText) return;
+      if (scene.exceptions.some(function (item) { return item.zh === (zh || enText); })) return;
+      scene.exceptions.push({ zh: zh || enText, en: enText });
+    }
+
+    const scopeSeen = Object.create(null);
+    (Array.isArray(data.scopes) ? data.scopes : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      let polarity = cleanText(item.polarity) || 'apply';
+      if (['exclude', 'allow', 'apply'].indexOf(polarity) === -1) polarity = 'apply';
+      const target = normalizeSpecTarget(item.target || item.text || '');
+      if (!target) return;
+      const targets = strictTargets(item, target);
+      if (!targets.length) return;
+      const scope = normalizeSpecScope(item.scope || '');
+      const exception = specExceptionLocal(item);
+      const key = scope + '|' + polarity + '|' + target + '|' + exception.zh;
+      if (scopeSeen[key]) return;
+      scopeSeen[key] = true;
+      const topicInfo = specTopicLocal(item, scope);
+      scene.scopes.push({
+        scope: scope,
+        topic: topicInfo.zh,
+        topicEn: topicInfo.en,
+        target: target,
+        targets: targets,
+        polarity: polarity,
+        exception: exception.zh,
+        exceptionEn: exception.en
+      });
+      if (polarity === 'exclude') {
+        const exists = scene.negations.some(function (negation) {
+          return (negation.targets || []).some(function (t) {
+            return t.en && targets.some(function (x) { return x.en === t.en; });
+          });
+        });
+        if (!exists) {
+          scene.negations.push({
+            text: cleanText(item.text || target),
+            topic: topicInfo.zh,
+            topicEn: topicInfo.en,
+            scope: scope,
+            targets: targets,
+            rawTarget: target,
+            negated: true
+          });
+        }
+      }
+      if (exception.zh) addExceptionLocal(exception.zh, exception.en);
+      if (scope === 'subject' && polarity === 'exclude') ensurePersonSubject();
+    });
+
+    (Array.isArray(data.exceptions) ? data.exceptions : []).forEach(function (item) {
+      if (typeof item === 'string') addExceptionLocal(item, '');
+      else if (item && typeof item === 'object') {
+        addExceptionLocal(item.text || item.exception, item.en);
+      }
+    });
+
+    // 作用范围去重：否定生成的 scope 和模型显式 scope 可能重复。
+    const dedupScopes = [];
+    scene.scopes.forEach(function (scope) {
+      const key = scope.scope + '|' + scope.polarity + '|' + (scope.target || '') + '|' + (scope.exception || '') +
+        '|' + (scope.exceptionEn || '');
+      const found = dedupScopes.some(function (item) {
+        return item.scope + '|' + item.polarity + '|' + (item.target || '') + '|' + (item.exception || '') +
+          '|' + (item.exceptionEn || '') === key;
+      });
+      if (!found) dedupScopes.push(scope);
+    });
+    scene.scopes = dedupScopes;
+
+    // 单元顺序保持模型给定的顺序；六框投影和组装继续用同一套 rules。
+    scene.segmentation = { tokens: [], alternatives: [], ambiguous: false, score: 0 };
+    finalizeScene(scene, source);
+    return scene;
+  }
+
+  // 默认走本地模型结构（英文只来自 en）。规则来源可显式传 source:'rule'
+  // 复用旧的词典接入实现，保持规则编译器行为不变。
+  function fromSpec(spec, raw, options) {
+    if (options && options.source === 'rule') return fromSpecLegacy(spec, raw);
+    return fromSpecLocal(spec, raw);
+  }
+
   // 本地模型只负责「哪些原文片段 + 什么槽位 / 角色 / 结构关系」；英文仍由
   // 本文件的词典与结构模板生成，不另做一套拼英文逻辑。模型返回的 text
   // 必须是原文子串，local-llm.js 会先逐段校验，这里再做一次防御性解析。
@@ -2322,7 +2829,7 @@
     return stripped || text;
   }
 
-  function fromSpec(spec, raw) {
+  function fromSpecLegacy(spec, raw) {
     const source = U.normalizeSpace(raw);
     const scene = emptyScene(source);
     scene.structured = true;

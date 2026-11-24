@@ -18,6 +18,7 @@
   const Feedback = T2I.Feedback;
   const Scene = T2I.Scene;
   const LocalLLM = T2I.LocalLLM;
+  const PromptFlow = T2I.PromptFlow;
 
   const STORAGE_KEYS = {
     favorites: 't2i.favorites.v1',
@@ -57,9 +58,17 @@
     lastFocused: null,
     allowCompletion: false,
     verify: null,
+    // 当前六框的来源：empty / local-model / rules。
+    // localSlots 为 true 时，中英同步、组装和缺英文兜底都不查词库。
+    source: 'empty',
+    localSlots: false,
+    modelNegative: null,
+    model: '',
+    editRevision: 0,
     localLLM: {
       settings: LocalLLM.loadSettings(window.localStorage),
       running: false,
+      op: '',
       controller: null,
       runId: 0,
       abortRequested: false
@@ -70,6 +79,7 @@
     idea: document.getElementById('idea'),
     ideaCount: document.getElementById('ideaCount'),
     fillBtn: document.getElementById('fillBtn'),
+    ruleFillBtn: document.getElementById('ruleFillBtn'),
     resetBtn: document.getElementById('resetBtn'),
     parseStatus: document.getElementById('parseStatus'),
     slotGrid: document.getElementById('slotGrid'),
@@ -78,7 +88,6 @@
     warningText: document.getElementById('warningText'),
     scenePanel: document.getElementById('scenePanel'),
     allowCompletion: document.getElementById('allowCompletion'),
-    localLLMEnabled: document.getElementById('localLLMEnabled'),
     localLLMApiRoot: document.getElementById('localLLMApiRoot'),
     localLLMModel: document.getElementById('localLLMModel'),
     localLLMHint: document.getElementById('localLLMHint'),
@@ -87,6 +96,8 @@
     localLLMStatusDetail: document.getElementById('localLLMStatusDetail'),
     localLLMAbort: document.getElementById('localLLMAbort'),
     generateBtn: document.getElementById('generateBtn'),
+    retranslateBtn: document.getElementById('retranslateBtn'),
+    englishSyncNote: document.getElementById('englishSyncNote'),
     outputSection: document.getElementById('outputSection'),
     outputMeta: document.getElementById('outputMeta'),
     positiveEn: document.getElementById('positiveEn'),
@@ -143,7 +154,11 @@
               '<h3>' + escapeHtml(def.label) + '</h3>' +
               '<p>' + escapeHtml(def.enLabel) + ' · ' + escapeHtml(def.hint) + '</p>' +
             '</div>' +
-            '<span class="completion-badge" data-completion-badge="' + key + '" hidden></span>' +
+            '<span class="slot-badges">' +
+              '<span class="completion-badge" data-completion-badge="' + key + '" hidden></span>' +
+              '<span class="sync-badge" data-stale-badge="' + key + '" hidden>英文待更新</span>' +
+              '<span class="sync-badge is-inferred" data-inferred-badge="' + key + '" hidden>补全</span>' +
+            '</span>' +
           '</header>' +
           '<div class="slot-fields">' +
             '<div class="field">' +
@@ -242,9 +257,34 @@
     if (state.composing[key + '-' + lang]) return;
     if (lang === 'zh') state.slots[key].zh = value;
     else state.slots[key].en = value;
-
+    state.editRevision += 1;
+    hideOutput();
     refreshCompletionUI(key);
-    setHint(key, lang === 'zh' ? '正在按词典同步英文…' : '正在按词典同步中文…', false);
+
+    if (state.localSlots) {
+      // 本地模型主流程：中文是权威，英文只由用户或「重新生成英文」更新；
+      // 任何词库同步都不会发生。
+      if (lang === 'zh') {
+        PromptFlow.markChineseEdited(state.slots, key);
+        setHint(
+          key,
+          state.slots[key].zh.trim()
+            ? '中文已修改，对应英文已标为待更新。点上方「重新生成英文」，会以当前中文为准重译。'
+            : '中文已清空；英文保留当前内容，需要时可直接修改英文。',
+          !!state.slots[key].zh.trim()
+        );
+      } else {
+        PromptFlow.markEnglishEdited(state.slots, key);
+        setHint(key, '英文以你的编辑为准；不会被词库回写或覆盖。', false);
+      }
+      updateStaleUI();
+      updateWarningFromState();
+      return;
+    }
+
+    state.slots[key].stale = false;
+    updateStaleUI();
+    setHint(key, lang === 'zh' ? '规则路径：正在按词典同步英文…' : '规则路径：正在按词典同步中文…', false);
 
     clearTimeout(state.timers[key]);
     state.timers[key] = setTimeout(function () {
@@ -253,6 +293,7 @@
   }
 
   function syncField(key, lang, value) {
+    if (state.localSlots) return;
     if (!value.trim()) {
       setHint(key, lang === 'zh' ? '中文为空，英文保留未动' : '英文为空，中文保留未动', false);
       return;
@@ -441,10 +482,11 @@
         '</div></div>');
     }
     const summary = scene.summary || {};
+    const localScene = scene.origin === 'local-llm' && scene.englishFrom === 'model';
     el.scenePanel.innerHTML =
       '<div class="scene-panel-head"><strong>结构化场景</strong>' +
-      '<span>' + (scene.origin === 'local-llm' ? '本地模型编译' : '规则编译器') + ' · ' +
-      (scene.structured ? '六个框由这棵树投影' : '部分内容退回原有片段解析') +
+      '<span>' + (localScene ? '本地模型自己分解并翻译（未参照词库）' : (scene.origin === 'local-llm' ? '本地模型编译' : '规则编译器')) + ' · ' +
+      (scene.structured ? (localScene ? '英文直接来自模型输出' : '六个框由这棵树投影') : '部分内容退回原有片段解析') +
       ' · 主体 ' + (summary.subjectCount || 0) +
       ' · 物体 ' + (summary.objectCount || 0) +
       ' · 关系 ' + (summary.relationCount || 0) +
@@ -467,12 +509,16 @@
     const errors = issueList.filter(function (issue) { return issue.severity === 'error'; });
     el.warningBanner.hidden = false;
     if (el.warningTitle) {
-      el.warningTitle.textContent = errors.length ? '语义守恒检查未通过' : '有未收录内容';
+      el.warningTitle.textContent = errors.length
+        ? '语义守恒检查未通过'
+        : (state.localSlots ? '本地模型校验提示' : '有未收录内容');
     }
     const parts = [];
     if (list.length) {
-      parts.push('未收录：' + list.join('、') + '。这些原文已保留在英文框里，没有被清空，也已自动记入本机「待补录」，不用再手抄。' +
-        '你可以直接改英文，或点「查看待补录」写备注并导出给大肥鱼补词。');
+      parts.push(state.localSlots
+        ? '本地模型没有给出这些片段的英文：' + list.join('、') + '。这些条目留空，没有用词库补译；请直接改英文框。'
+        : '未收录：' + list.join('、') + '。这些原文已保留在英文框里，没有被清空，也已自动记入本机「待补录」，不用再手抄。' +
+          '你可以直接改英文，或点「查看待补录」写备注并导出给大肥鱼补词。');
     }
     issueList.forEach(function (issue) {
       parts.push((issue.severity === 'error' ? '必须处理：' : '提示：') + issue.message);
@@ -488,6 +534,46 @@
       });
     });
     showWarning(all, state.verify ? state.verify.issues : []);
+  }
+
+  function updateStaleUI() {
+    const pending = state.localSlots ? PromptFlow.pendingKeys(state.slots) : [];
+    const inferred = state.localSlots ? PromptFlow.inferredKeys(state.slots) : [];
+    SF.slots.forEach(function (key) {
+      const slot = state.slots[key] || {};
+      const staleBadge = el.slotGrid.querySelector('[data-stale-badge="' + key + '"]');
+      const inferredBadge = el.slotGrid.querySelector('[data-inferred-badge="' + key + '"]');
+      if (staleBadge) staleBadge.hidden = !(state.localSlots && slot.stale === true);
+      if (inferredBadge) inferredBadge.hidden = !(state.localSlots && slot.inferred === true);
+      const fields = slotTextareas(key);
+      if (fields.en) fields.en.classList.toggle('is-stale', !!(state.localSlots && slot.stale === true));
+    });
+
+    if (el.retranslateBtn) {
+      el.retranslateBtn.disabled = !state.localSlots || !pending.length || state.localLLM.running;
+      el.retranslateBtn.textContent = pending.length
+        ? '重新生成英文（' + pending.length + '）'
+        : '重新生成英文';
+    }
+    if (!el.englishSyncNote) return;
+    el.englishSyncNote.classList.toggle('is-pending', state.localSlots && pending.length > 0);
+    el.englishSyncNote.classList.toggle('is-error', false);
+    if (!state.localSlots) {
+      el.englishSyncNote.textContent = state.source === 'rules'
+        ? '当前是规则生成（次要路径）：中文改动会按词库同步；模型主流程不会这样做。'
+        : '模型拆解后，这里会显示英文同步状态。';
+      return;
+    }
+    if (pending.length) {
+      el.englishSyncNote.textContent =
+        '有 ' + pending.length + ' 个字段的中文已改，英文待更新：' +
+        pending.map(slotLabelOf).join('、') + '。重译成功前不会放行生成。';
+    } else if (inferred.length) {
+      el.englishSyncNote.textContent =
+        '英文已与当前中文同步；其中 ' + inferred.map(slotLabelOf).join('、') + ' 为模型补全。';
+    } else {
+      el.englishSyncNote.textContent = '英文已与当前中文同步；可点「生成正/负提示词」预览或复制。';
+    }
   }
 
   function hideOutput() {
@@ -557,6 +643,8 @@
       out[key] = {
         zh: slot.zh || '',
         en: slot.en || '',
+        stale: slot.stale === true,
+        inferred: slot.inferred === true,
         completionItems: (slot.completionItems || []).map(function (item) {
           return { zh: item.zh, en: item.en, reason: item.reason || '' };
         })
@@ -573,22 +661,39 @@
     if (!hasContent) return null;
 
     ensureEnglishForAllSlots();
-    const scene = state.parsed && state.parsed.scene && state.parsed.raw === el.idea.value.trim()
-      ? state.parsed.scene
-      : null;
-    const assembled = Assemble.assemble(state.slots, { quality: state.allowCompletion });
-    const negative = Negative.build(assembled.positiveEn, scene ? Scene.negativePlan(scene) : null);
+    const scene = !state.localSlots && state.parsed && state.parsed.scene &&
+      state.parsed.raw === el.idea.value.trim() ? state.parsed.scene : null;
+    const assembled = Assemble.assemble(state.slots, {
+      quality: state.allowCompletion && !state.localSlots,
+      noLexicon: state.localSlots
+    });
+    const negative = state.localSlots
+      ? {
+        negativeEn: (state.modelNegative && state.modelNegative.en) || '',
+        negativeZh: (state.modelNegative && state.modelNegative.zh) || '',
+        items: [],
+        extraItems: [],
+        skipped: [],
+        suppressed: []
+      }
+      : Negative.build(assembled.positiveEn, scene ? Scene.negativePlan(scene) : null);
+    const pending = PromptFlow.pendingKeys(state.slots);
     return {
-      version: 1,
+      version: 2,
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       title: makeRecordTitle(el.idea.value, assembled.positiveEn),
       idea: el.idea.value,
+      source: state.localSlots ? 'local-model' : 'rules',
+      model: state.localSlots ? state.model : '',
+      infer: state.allowCompletion,
       slots: serializeSlots(),
       positiveEn: assembled.positiveEn,
       positiveZh: assembled.positiveZh,
       negativeEn: negative.negativeEn,
       negativeZh: negative.negativeZh,
       phraseCount: assembled.phraseCount,
+      pendingEnglish: pending,
+      staleEnglish: pending.length > 0,
       savedAt: Date.now()
     };
   }
@@ -622,6 +727,8 @@
   }
 
   function collectFeedback(ideaText) {
+    // 本地成功路径不查词库，也就没有「词库未收录」可记。
+    if (state.localSlots) return;
     const map = state.unknownBySlot;
     if (!Feedback.occurrencesFromUnknownMap(map).length) return;
     const fallbackIdea = SF.slots.map(function (key) {
@@ -639,6 +746,11 @@
 
   function recomputeUnknownBySlot() {
     const map = Object.create(null);
+    if (state.localSlots) {
+      SF.slots.forEach(function (key) { map[key] = []; });
+      state.unknownBySlot = map;
+      return map;
+    }
     SF.slots.forEach(function (key) {
       const slot = state.slots[key];
       const unknown = [];
@@ -860,11 +972,14 @@
   function loadRecord(record) {
     if (!record || !record.slots) return;
     cancelLocalFill('');
+    const legacyPending = Array.isArray(record.pendingEnglish) ? record.pendingEnglish : [];
     const fresh = SF.emptySlots();
     SF.slots.forEach(function (key) {
       const saved = record.slots[key] || {};
       fresh[key].zh = typeof saved.zh === 'string' ? saved.zh : '';
       fresh[key].en = typeof saved.en === 'string' ? saved.en : '';
+      fresh[key].stale = saved.stale === true || legacyPending.indexOf(key) !== -1;
+      fresh[key].inferred = saved.inferred === true;
       fresh[key].completionItems = Array.isArray(saved.completionItems)
         ? saved.completionItems.map(function (item) {
           return { zh: item.zh || '', en: item.en || '', reason: item.reason || '' };
@@ -876,19 +991,47 @@
     state.slots = fresh;
     state.parsed = null;
     state.verify = null;
+    state.source = record.source === 'local-model' ? 'local-model' : 'rules';
+    state.localSlots = state.source === 'local-model';
+    state.model = record.model || '';
+    state.modelNegative = state.localSlots && (record.negativeEn || record.negativeZh)
+      ? { en: record.negativeEn || '', zh: record.negativeZh || '' }
+      : null;
+    state.allowCompletion = record.infer === true;
+    if (el.allowCompletion) el.allowCompletion.checked = state.allowCompletion;
     state.unknownBySlot = Object.create(null);
+    state.editRevision = 0;
     renderScene(null);
     el.idea.value = record.idea || '';
     updateIdeaCount();
     writeAllSlotsToDom();
+    const label = state.libraryTab === 'favorites' ? '收藏夹' : '历史';
     SF.slots.forEach(function (key) {
-      setHint(key, '已从' + (state.libraryTab === 'favorites' ? '收藏夹' : '历史') + '打开，可继续修改。', false);
+      setHint(key, '已从' + label + '打开，可继续修改。', false);
     });
     refreshAllCompletionUI();
     showWarning([]);
     hideOutput();
+    updateStaleUI();
     el.searchResults.hidden = true;
     closeAllModals();
+
+    if (state.localSlots) {
+      const pending = PromptFlow.pendingKeys(state.slots);
+      if (pending.length) {
+        setStatus(
+          '已打开「' + (record.title || '未命名') + '」：其中 ' + pending.map(slotLabelOf).join('、') +
+          ' 的英文在保存时就待更新。中文和旧英文已原样恢复；请先点「重新生成英文」再生成提示词。',
+          true
+        );
+        setLocalStatus(
+          'secondary',
+          '历史记录已打开，英文待更新',
+          '没有自动用词库重译，也没有自动生成最终提示词；保留保存时的编辑与待更新状态。'
+        );
+        return;
+      }
+    }
     setStatus('已打开「' + (record.title || '未命名') + '」，正在按当前内容重新生成…', false);
     generate();
   }
@@ -923,12 +1066,17 @@
     } else {
       el.libraryBody.innerHTML = '<div class="record-list">' + list.map(function (record) {
         const preview = String(record.idea || record.positiveEn || '').replace(/\s+/g, ' ').trim();
+        const recordSlots = PromptFlow.normalizeSlots(record.slots, record.pendingEnglish);
+        const pendingCount = PromptFlow.pendingKeys(recordSlots).length;
+        const sourceLabel = record.source === 'local-model' ? '本地模型' : '规则次要路径';
         return (
           '<article class="record-card">' +
             '<div class="record-main">' +
               '<p class="record-title">' + escapeHtml(record.title || '未命名提示词') + '</p>' +
               '<p class="record-meta">' + escapeHtml(formatSavedAt(record.savedAt)) +
-                (record.phraseCount ? ' · ' + record.phraseCount + ' 个短语' : '') + '</p>' +
+                (record.phraseCount ? ' · ' + record.phraseCount + ' 个短语' : '') +
+                ' · ' + escapeHtml(sourceLabel) +
+                (pendingCount ? ' · <strong class="record-stale">英文待更新 ' + pendingCount + ' 项</strong>' : '') + '</p>' +
               '<p class="record-preview">' + escapeHtml(preview || '（没有想法文本）') + '</p>' +
             '</div>' +
             '<div class="record-actions">' +
@@ -1101,7 +1249,7 @@
 
     const groups = [];
     if (lexTop.length) {
-      groups.push(group('词库', lexHits.length + ' 个命中，显示前 ' + lexTop.length + ' 个', lexTop.map(function (hit) {
+      groups.push(group('词库（规则次要路径）', lexHits.length + ' 个命中，显示前 ' + lexTop.length + ' 个', lexTop.map(function (hit) {
         const entry = hit.entry;
         const slot = T2I.Lexicon.slotOfCategory[entry.category];
         return (
@@ -1247,11 +1395,11 @@
   }
 
   function syncLocalSettingsUI() {
-    if (!el.localLLMEnabled) return;
     const settings = state.localLLM.settings;
-    el.localLLMEnabled.checked = settings.enabled === true;
     if (el.localLLMApiRoot) el.localLLMApiRoot.value = LocalLLM.normalizeApiRoot(settings.apiRoot);
     if (el.localLLMModel) el.localLLMModel.value = LocalLLM.normalizeModel(settings.model);
+    state.allowCompletion = settings.infer === true;
+    if (el.allowCompletion) el.allowCompletion.checked = state.allowCompletion;
     updateLocalHint();
   }
 
@@ -1261,17 +1409,21 @@
 
   function onLocalSettingsChange() {
     const settings = state.localLLM.settings;
-    settings.enabled = !!(el.localLLMEnabled && el.localLLMEnabled.checked);
     settings.apiRoot = LocalLLM.normalizeApiRoot(el.localLLMApiRoot ? el.localLLMApiRoot.value : '');
     settings.model = LocalLLM.normalizeModel(el.localLLMModel ? el.localLLMModel.value : '');
+    settings.infer = !!(el.allowCompletion && el.allowCompletion.checked);
+    state.allowCompletion = settings.infer;
     if (el.localLLMApiRoot) el.localLLMApiRoot.value = settings.apiRoot;
     if (el.localLLMModel) el.localLLMModel.value = settings.model;
     persistLocalSettings();
     updateLocalHint();
-    if (!settings.enabled) {
-      cancelLocalFill('');
-      setLocalStatus(null);
-    }
+  }
+
+  function setRequestButtonsDisabled(disabled) {
+    if (el.fillBtn) el.fillBtn.disabled = disabled;
+    if (el.ruleFillBtn) el.ruleFillBtn.disabled = disabled;
+    if (el.retranslateBtn) el.retranslateBtn.disabled = disabled ||
+      !state.localSlots || !PromptFlow.pendingKeys(state.slots).length;
   }
 
   function cancelLocalFill(message) {
@@ -1279,12 +1431,14 @@
     const controller = state.localLLM.controller;
     state.localLLM.controller = null;
     state.localLLM.running = false;
+    state.localLLM.op = '';
     state.localLLM.abortRequested = false;
-    if (el.fillBtn) el.fillBtn.disabled = false;
+    setRequestButtonsDisabled(false);
+    updateStaleUI();
     if (controller) {
       try { controller.abort(); } catch (err) { /* 忽略 */ }
     }
-    if (message) setLocalStatus('fallback', '已中止本地解析', message);
+    if (message) setLocalStatus('error', '已中止本地模型请求', message + ' 已有编辑与英文都保留，没有改用规则或词库。');
     else setLocalStatus(null);
   }
 
@@ -1295,33 +1449,17 @@
     if (controller) {
       try { controller.abort(); } catch (err) { /* 忽略 */ }
     }
-    setLocalStatus('running', '正在中止…', '这次本地解析会停止，随后自动用规则编译器给出结果。');
+    setLocalStatus(
+      'running',
+      '正在中止…',
+      '这次请求会停止；已有中文、英文和待更新标记都会保留，不会自动改用规则。'
+    );
   }
 
-  function finishLocalFill(runId, idea, result) {
-    if (runId !== state.localLLM.runId || !state.localLLM.running) return;
-    state.localLLM.running = false;
-    state.localLLM.controller = null;
-    const abortedByUser = state.localLLM.abortRequested;
-    state.localLLM.abortRequested = false;
-    if (el.fillBtn) el.fillBtn.disabled = false;
-
-    if (result && result.status === 'ok') {
-      const warningCount = result.scene && result.scene.unknown ? result.scene.unknown.length : 0;
-      setLocalStatus(
-        'ok',
-        '本地解析完成',
-        '用时 ' + localSecondsText(result.elapsedMs) + '，模型 ' + result.model + '。' +
-        (warningCount ? '有 ' + warningCount + ' 处词库未收录，已在场景面板和警告条标出；' : '') +
-        '六个框由这棵场景树经同一套规则生成。'
-      );
-      fillFromParsed(result.parsed, { mode: 'local' });
-      return;
-    }
-
+  function localErrorDetail(result) {
     const code = (result && result.code) || 'unexpected';
     let reason = LocalLLM.reasonText(code);
-    if (code === 'aborted' && !abortedByUser) reason = '本地解析已中止';
+    if (code === 'aborted' && !state.localLLM.abortRequested) reason = '本地模型请求已中止';
     let detail = '原因：' + reason + '。';
     if (code === 'network') {
       detail += '请确认：Ollama 已打开且 11434 在监听、电脑没有休眠、Tailscale 已连上、Tailscale Serve 和 CORS 已放行。';
@@ -1329,16 +1467,51 @@
       detail += '当前 Origin 是 ' + (window.location && window.location.origin ? window.location.origin : '本页') +
         '，需要在 Ollama 侧放行；手机访问时也要确认该地址在尾网内可达。';
     } else if (code === 'timeout') {
-      detail += '首次加载模型可能较慢，可以重试，或先在本机用 ollama 跑一次让模型常驻。';
+      detail += '首次加载模型可能较慢，可以重试；也可以先在本机跑一次让模型常驻。';
     } else if (code === 'config') {
       detail += '请在「连接设置」里填写完整的 http(s):// 地址。';
     }
-    if (result && result.detail && ['invalid-json', 'invalid-spec', 'coverage', 'negation', 'conservation', 'server'].indexOf(code) !== -1) {
+    if (result && result.detail &&
+        ['invalid-json', 'invalid-spec', 'missing-english', 'inferred', 'empty-negative', 'server', 'empty-fields', 'missing-english'].indexOf(code) !== -1) {
       detail += ' 细节：' + result.detail + '。';
     }
-    detail += ' 这次没有用上本地模型，已自动用规则编译器生成可用结果。';
-    setLocalStatus('fallback', '已回退规则', detail);
-    fillFromParsed(Parser.parse(idea), { mode: 'fallback' });
+    return detail;
+  }
+
+  function finishLocalFill(runId, result) {
+    if (runId !== state.localLLM.runId || !state.localLLM.running) return;
+    state.localLLM.running = false;
+    state.localLLM.op = '';
+    state.localLLM.controller = null;
+    state.localLLM.abortRequested = false;
+    setRequestButtonsDisabled(false);
+    updateStaleUI();
+
+    if (result && result.status === 'ok') {
+      fillFromModel(result);
+      return;
+    }
+
+    const code = (result && result.code) || 'unexpected';
+    const detail = localErrorDetail(result);
+    setLocalStatus(
+      'error',
+      '本地模型失败，已有内容未改动',
+      detail + ' 本次没有生成新结果，也没有自动改用规则或词库。需要规则结果时，请自己点「改用规则生成（次要）」。'
+    );
+    setStatus('本地模型失败：' + LocalLLM.reasonText(code) + '。已有编辑/上一轮结果已保留；没有静默回退词库。', true);
+  }
+
+  function currentFieldPayload() {
+    readSlotsFromDom();
+    const out = Object.create(null);
+    SF.slots.forEach(function (key) {
+      out[key] = {
+        zh: state.slots[key].zh || '',
+        en: state.slots[key].en || ''
+      };
+    });
+    return out;
   }
 
   function startLocalFill(idea) {
@@ -1352,37 +1525,227 @@
       controller = null;
     }
     state.localLLM.running = true;
+    state.localLLM.op = 'fill';
     state.localLLM.abortRequested = false;
     state.localLLM.controller = controller;
-    if (el.fillBtn) el.fillBtn.disabled = true;
+    setRequestButtonsDisabled(true);
+    updateStaleUI();
     const model = LocalLLM.normalizeModel(state.localLLM.settings.model);
     setLocalStatus(
       'running',
-      '本地解析中',
+      '本地模型拆解中',
       '正在请求本机 ' + model + '；首次加载可能要十几秒，最长等 ' +
       Math.round(LocalLLM.TIMEOUT_MS / 1000) + ' 秒，可以点「中止」。'
     );
 
-    LocalLLM.compile(state.localLLM.settings, idea, {
+    LocalLLM.generate(state.localLLM.settings, idea, {
       signal: controller ? controller.signal : undefined,
-      completion: state.allowCompletion,
-      quality: state.allowCompletion,
+      infer: state.allowCompletion,
       timeoutMs: LocalLLM.TIMEOUT_MS
     }).then(function (result) {
-      finishLocalFill(runId, idea, result);
+      finishLocalFill(runId, result);
     }).catch(function (err) {
-      finishLocalFill(runId, idea, {
-        status: 'fallback',
+      finishLocalFill(runId, {
+        status: 'error',
         code: 'unexpected',
-        reason: String(err && err.message ? err.message : err)
+        reason: String(err && err.message ? err.message : err),
+        detail: String(err && err.message ? err.message : err)
       });
     });
   }
 
+  function finishRetranslate(runId, revision, pending, result) {
+    if (runId !== state.localLLM.runId || !state.localLLM.running) return;
+    state.localLLM.running = false;
+    state.localLLM.op = '';
+    state.localLLM.controller = null;
+    state.localLLM.abortRequested = false;
+    setRequestButtonsDisabled(false);
+    updateStaleUI();
+
+    if (revision !== state.editRevision) {
+      setLocalStatus(
+        'error',
+        '重译期间中文又被修改，结果未采用',
+        '你的最新中文和旧英文都保留着；待更新标记还在。请重新点「重新生成英文」。'
+      );
+      setStatus('重译结果已丢弃：请求期间中文又改了。最新编辑已保留，请重新点「重新生成英文」。', true);
+      updateStaleUI();
+      return;
+    }
+
+    if (!result || result.status !== 'ok') {
+      const detail = localErrorDetail(result || { code: 'unexpected' });
+      setLocalStatus(
+        'error',
+        '英文重译失败，已有编辑已保留',
+        detail + ' 中文没有改动，旧英文也还在；' + pending.map(slotLabelOf).join('、') +
+        ' 仍标记为待更新。没有改用规则或词库。'
+      );
+      setStatus('英文重译失败：' + LocalLLM.reasonText((result && result.code) || 'unexpected') +
+        '。中文和旧英文已保留，可重试。', true);
+      updateStaleUI();
+      return;
+    }
+
+    const applied = PromptFlow.applyEnglish(state.slots, result.fields, pending);
+    if (!applied.ok) {
+      setLocalStatus(
+        'error',
+        '重译结果不完整，已有编辑已保留',
+        '模型没有给出这些字段的可用英文：' + applied.missing.map(slotLabelOf).join('、') +
+        '。中文与旧英文都没有改动，没有用词库补译。'
+      );
+      setStatus('重译结果不完整，未写入任何英文；请重试。', true);
+      updateStaleUI();
+      return;
+    }
+
+    if (result.negative && result.negative.en) state.modelNegative = result.negative;
+    state.localSlots = true;
+    state.source = 'local-model';
+    state.model = result.model || state.model;
+    state.verify = null;
+    writeAllSlotsToDom();
+    updateStaleUI();
+    hideOutput();
+    setLocalStatus(
+      'ok',
+      '英文重译完成',
+      '用时 ' + localSecondsText(result.elapsedMs) + '，模型 ' + (result.model || state.model) + '。只更新了 ' +
+      applied.updated.map(slotLabelOf).join('、') + ' 的英文；中文保持你改过的版本，没有回写。'
+    );
+    setStatus('英文已按当前中文重译；中文未被改回。已刷新正/负提示词。', false);
+    generate();
+  }
+
+  function startRetranslate() {
+    if (state.localLLM.running || !state.localSlots) return;
+    const fields = currentFieldPayload();
+    const pending = PromptFlow.pendingKeys(state.slots);
+    if (!pending.length) {
+      setStatus('当前没有需要重译的字段：英文已经和中文同步。', false);
+      return;
+    }
+    const runId = state.localLLM.runId + 1;
+    state.localLLM.runId = runId;
+    const revision = state.editRevision;
+    let controller = null;
+    try {
+      controller = new AbortController();
+    } catch (err) {
+      controller = null;
+    }
+    state.localLLM.running = true;
+    state.localLLM.op = 'retranslate';
+    state.localLLM.abortRequested = false;
+    state.localLLM.controller = controller;
+    setRequestButtonsDisabled(true);
+    updateStaleUI();
+    const model = LocalLLM.normalizeModel(state.localLLM.settings.model);
+    setLocalStatus(
+      'running',
+      '正在重新生成英文',
+      '以当前六个中文框为准，只重译待更新字段：' + pending.map(slotLabelOf).join('、') +
+      '。会带上原始描述和其余字段作上下文，模型 ' + model + '，可点「中止」。'
+    );
+
+    LocalLLM.retranslate(state.localLLM.settings, {
+      idea: el.idea.value,
+      fields: fields,
+      pending: pending,
+      negative: state.modelNegative
+    }, {
+      signal: controller ? controller.signal : undefined,
+      timeoutMs: LocalLLM.TIMEOUT_MS
+    }).then(function (result) {
+      finishRetranslate(runId, revision, pending, result);
+    }).catch(function (err) {
+      finishRetranslate(runId, revision, pending, {
+        status: 'error',
+        code: 'unexpected',
+        reason: String(err && err.message ? err.message : err),
+        detail: String(err && err.message ? err.message : err)
+      });
+    });
+  }
+
+  function fillFromModel(result) {
+    const fields = result.fields || {};
+    state.slots = SF.emptySlots();
+    const counts = {};
+    const inferred = [];
+    SF.slots.forEach(function (key) {
+      const field = fields[key] || {};
+      state.slots[key].zh = typeof field.zh === 'string' ? field.zh : '';
+      state.slots[key].en = typeof field.en === 'string' ? field.en : '';
+      state.slots[key].stale = false;
+      state.slots[key].inferred = field.inferred === true;
+      state.slots[key].items = [];
+      counts[key] = (state.slots[key].zh || state.slots[key].en) ? 1 : 0;
+      if (state.slots[key].inferred) inferred.push(key);
+    });
+    state.localSlots = true;
+    state.source = 'local-model';
+    state.parsed = null;
+    state.verify = null;
+    state.modelNegative = result.negative || null;
+    state.model = result.model || LocalLLM.normalizeModel(state.localLLM.settings.model);
+    state.unknownBySlot = Object.create(null);
+    SF.slots.forEach(function (key) { state.unknownBySlot[key] = []; });
+
+    writeAllSlotsToDom();
+    renderScene(null);
+    updateWarningFromState();
+    hideOutput();
+    refreshAllCompletionUI();
+    updateStaleUI();
+
+    const filled = SF.slots.filter(function (key) { return counts[key]; }).length;
+    const inferredText = inferred.length
+      ? ' 其中 ' + inferred.map(slotLabelOf).join('、') + ' 是模型按开关补全，已在框上标「补全」。'
+      : '';
+    setLocalStatus(
+      'ok',
+      '本地模型拆解完成',
+      '用时 ' + localSecondsText(result.elapsedMs) + '，模型 ' + state.model +
+      '。由模型自己理解、分解并翻译，请求没有携带词库，也没有用词库改写模型英文。' + inferredText
+    );
+    setStatus(
+      '本地模型已把整体描述拆成六个中英对照框，直接给出了英文。' +
+      '填了 ' + filled + ' 个字段；中文可逐项修改，改后对应英文会标「待更新」。' +
+      '确认中文后点「重新生成英文」，会以当前中文为准重译。' + inferredText,
+      false
+    );
+
+    SF.slots.forEach(function (key) {
+      const slot = state.slots[key];
+      if (!counts[key]) {
+        setHint(key, '模型没有从描述里拆出这一项；需要时可以直接填写中文或英文。', false);
+        return;
+      }
+      if (slot.inferred) {
+        setHint(key, '这一项是模型在你开启「允许推测」后补全的；不需要可清空或改写。', false);
+      } else if (slot.stale) {
+        setHint(key, '中文已改，英文待更新。点「重新生成英文」以当前中文为准重译。', true);
+      } else {
+        setHint(key, '由本地模型拆出并翻译；改中文会标记英文待更新，改英文不会被词库覆盖。', false);
+      }
+    });
+
+    setTimeout(function () {
+      const target = document.getElementById('workflow-title');
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 90);
+  }
+
   function fillFromParsed(parsed, meta) {
-    const mode = meta && meta.mode;
-    const lead = mode === 'local' ? '本地解析完成：' : (mode === 'fallback' ? '已回退规则：' : '');
+    // 只服务用户明确点击「改用规则生成（次要）」的路径。
     const scene = parsed.scene;
+    state.localSlots = false;
+    state.source = 'rules';
+    state.modelNegative = null;
+    state.model = '';
     const hasUnits = scene ? (scene.units || []).length > 0 : (parsed.segments || []).length > 0;
     const hasConstraints = !!(scene && ((scene.negations || []).length || (scene.scopes || []).length));
     state.verify = null;
@@ -1394,13 +1757,18 @@
       renderScene(scene);
       updateWarningFromState();
       hideOutput();
-      setStatus(lead + '这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
+      updateStaleUI();
+      setStatus('规则生成（次要路径）：这段描述暂时没能拆出可用的提示词片段。', true);
       return;
     }
 
-    const filled = SF.fill(parsed);
+    const filled = SF.fill(parsed, { noLexicon: false });
     const completed = Complete.complete(filled.slots, { enabled: state.allowCompletion });
     state.slots = completed.slots;
+    SF.slots.forEach(function (key) {
+      state.slots[key].stale = false;
+      state.slots[key].inferred = false;
+    });
     state.parsed = parsed;
     state.unknownBySlot = Object.create(null);
     SF.slots.forEach(function (key) {
@@ -1428,6 +1796,8 @@
     updateWarningFromState();
     collectFeedback(parsed.raw || el.idea.value);
     hideOutput();
+    refreshAllCompletionUI();
+    updateStaleUI();
 
     const counts = {};
     SF.slots.forEach(function (key) { counts[key] = state.slots[key].items.length; });
@@ -1435,22 +1805,26 @@
       .map(function (def) { return def.label.replace(/与.*/, '') + ' ' + counts[def.key]; })
       .join(' · ');
     const completionCount = completed.added.length;
-    const isLocal = !!(scene && scene.origin === 'local-llm');
     const structure = scene && scene.structured
-      ? (isLocal ? '本地模型结构化场景：' : '结构化场景：') + '主体 ' + (scene.summary.subjectCount || 0) +
+      ? '结构化场景：主体 ' + (scene.summary.subjectCount || 0) +
         ' · 物体 ' + (scene.summary.objectCount || 0) +
         ' · 关系 ' + (scene.summary.relationCount || 0) +
         ' · 否定 ' + (scene.summary.negationCount || 0) + '。'
       : '部分内容沿用了片段解析。';
 
+    setLocalStatus(
+      'secondary',
+      '规则生成完成（次要路径）',
+      '你明确选择了规则 + 词库；这不是本地模型结果。需要模型理解与翻译时，请点「用本地模型拆解并翻译」。'
+    );
     if (!hasUnits && hasConstraints) {
-      setStatus(lead + '只解析出否定 / 作用范围约束：正面框为空，负面提示词会按约束生成。可继续补充想画的内容。', false);
+      setStatus('规则生成（次要路径）：只解析出否定 / 作用范围约束；正面框为空，负面提示词会按约束生成。', false);
     } else if (!hasUnits) {
-      setStatus(lead + '这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
+      setStatus('规则生成（次要路径）：暂时没能拆出可用的提示词片段。', true);
     } else {
       setStatus(
-        lead + structure + '已投影到六框（' + summary + '）。' +
-        (state.allowCompletion ? '规则补全 ' + completionCount + ' 项，已在框下标出。' : '规则补全默认关闭，没有擅自补光线/镜头/画风。') +
+        '规则生成（次要路径）：' + structure + '已投影到六框（' + summary + '）。' +
+        (state.allowCompletion ? '规则补全 ' + completionCount + ' 项，已在框下标出。' : '规则补全关闭。') +
         (scene && scene.ambiguities && scene.ambiguities.length ? ' 分词仍有备选解释，已保留在结构化场景里。' : ''),
         false
       );
@@ -1462,16 +1836,14 @@
       if (count) {
         setHint(
           key,
-          '由想法拆出 ' + count + ' 条' + (added ? '，其中 ' + added + ' 条为补全' : '') +
-          '。修改中文或英文会自动尝试对齐。',
+          '规则路径拆出 ' + count + ' 条' + (added ? '，其中 ' + added + ' 条为补全' : '') +
+          '。修改中文或英文会按词库尝试对齐；这是次要路径。',
           false
         );
       } else {
-        setHint(key, '这个框没有从想法里拆到内容。', false);
+        setHint(key, '规则路径没有从这个框拆到内容。', false);
       }
     });
-
-    refreshAllCompletionUI();
 
     setTimeout(function () {
       const target = document.getElementById('workflow-title');
@@ -1482,22 +1854,31 @@
   function runFill() {
     const idea = el.idea.value.trim();
     if (!idea) {
-      setStatus('先写一句整体想法，再点「解析并填入各框」。', true);
+      setStatus('先写一段整体描述，再点「用本地模型拆解并翻译」。', true);
       el.idea.focus();
       return;
     }
+    startLocalFill(idea);
+  }
 
-    if (!state.localLLM.settings.enabled) {
-      setLocalStatus(null);
-      fillFromParsed(Parser.parse(idea), { mode: 'rule' });
+  function runRuleFill() {
+    const idea = el.idea.value.trim();
+    if (!idea) {
+      setStatus('先写一段整体描述，再选择规则生成。', true);
+      el.idea.focus();
       return;
     }
-
-    startLocalFill(idea);
+    cancelLocalFill('');
+    fillFromParsed(Parser.parse(idea), { mode: 'rule' });
   }
 
   function clearAll() {
     cancelLocalFill('');
+    state.localSlots = false;
+    state.source = 'empty';
+    state.modelNegative = null;
+    state.model = '';
+    state.editRevision = 0;
     state.slots = SF.emptySlots();
     state.parsed = null;
     state.generated = null;
@@ -1515,6 +1896,7 @@
     });
     updateWarningFromState();
     hideOutput();
+    updateStaleUI();
     setStatus('已清空。', false);
     el.idea.focus();
     refreshAllCompletionUI();
@@ -1528,19 +1910,26 @@
       completionItems: [],
       zh: '',
       en: '',
+      stale: false,
+      inferred: false,
       unknown: []
     };
     const fields = slotTextareas(key);
     fields.zh.value = '';
     fields.en.value = '';
     state.unknownBySlot[key] = [];
+    state.editRevision += 1;
+    hideOutput();
     updateWarningFromState();
     setHint(key, '本框已清空。', false);
     refreshCompletionUI(key);
+    updateStaleUI();
   }
 
   function ensureEnglishForAllSlots() {
     const unknownAll = [];
+    // 本地模型成功路径：英文只来自模型/用户，不再按词库补齐缺英文。
+    if (state.localSlots) return unknownAll;
     SF.slots.forEach(function (key) {
       const slot = state.slots[key];
       if (!slot.en.trim() && slot.zh.trim()) {
@@ -1568,21 +1957,56 @@
       state.slots[key].en = fields.en.value;
     });
 
+    if (state.localSlots) {
+      const pending = PromptFlow.pendingKeys(state.slots);
+      if (pending.length) {
+        hideOutput();
+        updateStaleUI();
+        setStatus(
+          '先重译英文：' + pending.map(slotLabelOf).join('、') +
+          ' 的中文已改，英文仍标记待更新。点上方「重新生成英文」成功后才能生成，避免复制过期英文。',
+          true
+        );
+        if (el.retranslateBtn) el.retranslateBtn.focus({ preventScroll: false });
+        return;
+      }
+    }
+
     recomputeUnknownBySlot();
     ensureEnglishForAllSlots();
-    const assembled = Assemble.assemble(state.slots, { quality: state.allowCompletion });
-    const scene = state.parsed && state.parsed.scene && state.parsed.raw === el.idea.value.trim()
-      ? state.parsed.scene
-      : null;
-    const negativePlan = scene ? Scene.negativePlan(scene) : { extra: [], suppress: [], notes: [] };
-    const negative = Negative.build(assembled.positiveEn, negativePlan);
-    const verify = scene ? Scene.verify(scene, state.slots, assembled, negative) : null;
+    const assembled = Assemble.assemble(state.slots, {
+      quality: state.allowCompletion && !state.localSlots,
+      noLexicon: state.localSlots
+    });
+    let scene = null;
+    let verify = null;
+    let negative;
+    if (state.localSlots) {
+      const modelNegative = state.modelNegative || { zh: '', en: '' };
+      negative = {
+        negativeEn: modelNegative.en || '',
+        negativeZh: modelNegative.zh || '',
+        items: [],
+        extraItems: [],
+        skipped: [],
+        suppressed: []
+      };
+    } else {
+      scene = state.parsed && state.parsed.scene && state.parsed.raw === el.idea.value.trim()
+        ? state.parsed.scene
+        : null;
+      const negativePlan = scene ? Scene.negativePlan(scene) : { extra: [], suppress: [], notes: [] };
+      negative = Negative.build(assembled.positiveEn, negativePlan);
+      verify = scene ? Scene.verify(scene, state.slots, assembled, negative) : null;
+    }
     state.verify = verify;
 
-    const onlyNegative = !!(scene && !assembled.positiveEn.trim() &&
-      ((scene.negations || []).length || (scene.scopes || []).some(function (scope) { return scope.polarity === 'exclude'; })));
+    const onlyNegative = state.localSlots
+      ? !!negative.negativeEn.trim()
+      : !!(scene && !assembled.positiveEn.trim() &&
+        ((scene.negations || []).length || (scene.scopes || []).some(function (scope) { return scope.polarity === 'exclude'; })));
     if (!assembled.positiveEn.trim() && !onlyNegative) {
-      setStatus('六个框还是空的。先在上方写整体想法并「解析并填入各框」，或直接填写任一框。', true);
+      setStatus('六个框还是空的。先在上方写整体描述并用本地模型拆解，或直接填写任一框。', true);
       el.idea.focus();
       return;
     }
@@ -1593,19 +2017,36 @@
     el.positiveZh.textContent = assembled.positiveZh || (onlyNegative ? '（只有负面约束，没有正面内容）' : '（中文框为空，暂无可对照内容）');
     el.negativeEn.value = negative.negativeEn;
     el.negativeZh.textContent = negative.negativeZh;
-    el.outputMeta.textContent =
-      assembled.phraseCount + ' 个正面短语 · ' + negative.items.length + ' 个负面词' +
-      (negative.extraItems.length ? ' · 其中 ' + negative.extraItems.length + ' 个来自本轮否定/范围约束' : '') +
-      (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '') +
-      (scene && scene.origin === 'local-llm' ? ' · 结构来自本地解析模型' : '');
+    const negCount = state.localSlots
+      ? (negative.negativeEn ? negative.negativeEn.split(',').filter(function (item) { return item.trim(); }).length : 0)
+      : negative.items.length;
+    const extraCount = state.localSlots ? 0 : negative.extraItems.length;
+    if (state.localSlots) {
+      const inferred = PromptFlow.inferredKeys(state.slots);
+      el.outputMeta.textContent =
+        assembled.phraseCount + ' 个正面短语 · ' + negCount + ' 个负面词 · 英文来自本地模型 · 未使用词库' +
+        (inferred.length ? ' · 补全 ' + inferred.length + ' 个' : '');
+    } else {
+      el.outputMeta.textContent =
+        assembled.phraseCount + ' 个正面短语 · ' + negCount + ' 个负面词' +
+        (extraCount ? ' · 其中 ' + extraCount + ' 个来自本轮否定/范围约束' : '') +
+        (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '') +
+        ' · 规则次要路径';
+    }
 
-    if (assembled.quality.length) {
+    if (state.localSlots) {
+      const inferred = PromptFlow.inferredKeys(state.slots);
+      el.outputFootnote.textContent = inferred.length
+        ? '英文由本地模型按描述直接给出，未使用词库；其中 ' + inferred.map(slotLabelOf).join('、') +
+          ' 是开启「允许推测」后的补全。再次修改中文会隐藏本结果并标记英文待更新。'
+        : '英文由本地模型按描述直接给出，未使用词库或规则补全。再次修改中文会隐藏本结果并标记英文待更新。';
+    } else if (assembled.quality.length) {
       el.outputFootnote.textContent = '末尾质量词为勾选规则补全后加入：' +
         assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。';
     } else if (onlyNegative) {
       el.outputFootnote.textContent = '本轮只有否定 / 作用范围约束，正面提示词为空；负面提示词已按局部约束生成，没有升级成全局否定。';
     } else {
-      el.outputFootnote.textContent = '未勾选规则补全：没有自动添加光线、镜头、画风或质量词。';
+      el.outputFootnote.textContent = '规则次要路径：英文由词典 / 规则生成；主流程应使用本地模型。';
     }
 
     el.outputSection.hidden = false;
@@ -1625,10 +2066,12 @@
     } else if (assembled.hasUntranslated) {
       showToast('提示词里仍保留未收录中文，建议在英文框里改写');
       setStatus('已生成，但正面提示词仍保留未收录中文，结果不完整，请先修正。', true);
-    } else if (onlyNegative) {
+    } else if (onlyNegative && !assembled.positiveEn.trim()) {
       setStatus('已生成负面约束；正面为空，可继续补充想画的主体与场景。', false);
+    } else if (state.localSlots) {
+      setStatus('已生成正/负提示词，英文来自本地模型与你的编辑，未使用词库。复制英文即可粘贴到 SDXL / ComfyUI。', false);
     } else {
-      setStatus('已生成正面与负面提示词。复制英文即可粘贴到 SDXL / ComfyUI。', false);
+      setStatus('已生成正/负提示词（规则次要路径）。复制英文即可粘贴到 SDXL / ComfyUI。', false);
     }
 
     recordHistory();
@@ -1731,24 +2174,27 @@
     if (el.allowCompletion) {
       el.allowCompletion.checked = state.allowCompletion;
       el.allowCompletion.addEventListener('change', function () {
-        state.allowCompletion = el.allowCompletion.checked;
+        onLocalSettingsChange();
         state.verify = null;
         setStatus(
           state.allowCompletion
-            ? '已允许规则补全：只会补光线、镜头、画风这类缺失维度，仍会标明补全项。'
-            : '已关闭规则补全：不会自动补光线、镜头、画风或质量词。',
+            ? '已开启模型推测补全：仅下次模型拆解时可补光线/镜头/画风，并在框上标记「补全」；不会补人物、剧情、服装。'
+            : '已关闭模型推测补全：模型不会补用户没提到的光线、镜头或画风。',
           false
         );
       });
     }
     el.fillBtn.addEventListener('click', runFill);
+    if (el.ruleFillBtn) el.ruleFillBtn.addEventListener('click', runRuleFill);
+    if (el.retranslateBtn) el.retranslateBtn.addEventListener('click', startRetranslate);
     el.resetBtn.addEventListener('click', clearAll);
     el.generateBtn.addEventListener('click', generate);
     el.idea.addEventListener('input', function () {
       updateIdeaCount();
-      if (state.localLLM.running) cancelLocalFill('想法已修改，已中止上一次本地解析，请重新点「解析并填入各框」。');
+      if (state.localLLM.running) {
+        cancelLocalFill('整体描述已修改，已中止上一次本地模型请求；已有框内容保留，请重新提交。');
+      }
     });
-    if (el.localLLMEnabled) el.localLLMEnabled.addEventListener('change', onLocalSettingsChange);
     if (el.localLLMApiRoot) {
       el.localLLMApiRoot.addEventListener('change', onLocalSettingsChange);
       el.localLLMApiRoot.addEventListener('blur', onLocalSettingsChange);
@@ -1909,9 +2355,9 @@
     if (window.T2I.Lexicon && window.T2I.Lexicon.stats) {
       const stats = window.T2I.Lexicon.stats;
       const count = stats.canonicalEntries.toLocaleString('zh-CN');
-      el.searchInput.placeholder = '搜索 ' + count + ' 条词库、已填框、收藏和历史…';
-      el.outputFootnote.textContent = '词典已载入：' + count + ' 条规范词条、' + stats.zhAliases.toLocaleString('zh-CN') + ' 个中文说法。';
+      el.searchInput.placeholder = '搜索 ' + count + ' 条词库（规则次要路径）、已填框、收藏和历史…';
     }
+    updateStaleUI();
   }
 
   init();

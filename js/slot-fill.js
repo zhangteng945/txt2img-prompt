@@ -68,8 +68,10 @@
     return slots;
   }
 
-  function fill(parsed) {
+  function fill(parsed, options) {
     const slots = emptySlots();
+    const noLexicon = !!(options && options.noLexicon) ||
+      !!(parsed && parsed.scene && parsed.scene.englishFrom === 'model');
     const unknown = [];
 
     // 内部以结构化场景为准：六个框只是 scene.units 的投影。Scene 不存在或
@@ -94,7 +96,8 @@
       let zh = U.cleanChinese(segment.zh || segment.text || '');
 
       // 纯英文输入时，把英文框内容回译成中文，保证六框仍有中英对照。
-      if (zh && !U.hasCjk(zh)) {
+      // 本地模型成功路径不再查词库：模型给什么英文就用什么，缺中文就留空。
+      if (zh && !U.hasCjk(zh) && !noLexicon) {
         const back = TR.translateEn(en || zh);
         if (back.zh) zh = back.zh;
       }

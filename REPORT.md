@@ -5,7 +5,7 @@
 已在 `/Users/zhangteng/txt2img-prompt` 完成一个可直接打开、可直接部署到 GitHub Pages 的静态文生图提示词工具。
 
 - 入口：根目录 `index.html`
-- 纯 HTML / CSS / 原生 JavaScript，无框架、无构建步骤、无后端；默认不联网，可选接入本机 Ollama
+- 纯 HTML / CSS / 原生 JavaScript，无框架、无构建步骤、无后端；主流程请求本机 Ollama，规则 + 词库为明确标注的次要路径
 - 桌面双栏、手机单栏；已在 1400px 与 390px 宽度下用真实 WebKit 渲染检查
 - 六个框均为中文 + 英文对照，可分别编辑
 - 搜索词库 / 已填框 / 收藏 / 历史，词库结果可一键填入对应框
@@ -16,8 +16,10 @@
 - 新增「待补录」反馈通道：未收录片段自动记入本机、去重计数、保留最近上下文，可写备注并导出 Markdown + JSON 或预填 GitHub issue
 - 上一轮词典在 10,718 条基础上补厚到 **13,232 条规范词**（人工 7,183 + 组合 6,049）；object 从 **346 条增至 2,859 条**，按生活场景补了家具、厨房、食物、家电数码、文具玩具、运动乐器、街边设施、交通/建筑局部、自然物和动物用品。高频外貌匹配、短别名边界、「拒绝抽烟的广告」等既有回归继续通过
 - **本轮（全类词库拓宽）**把词典从 **13,232 条扩到 14,445 条**，新增 **1,213 条**规范词；新增 `action` 行为动作 **331 条**、`sign` 告示标识 **163 条**，其余补在人物、外貌、表情、发型、眼妆、服装、配饰、场景、物体、光线、镜头、画风、材质、图案、氛围。既有反馈通道、短别名边界、拒绝抽烟的广告、object 约 2,859、关系句分框回归继续通过。详见 1.2。
-- 本轮新增可选的「使用本地解析模型」开关（默认关闭）：打开后请求本机/Tailscale 上的 Ollama `qwen3.5:4b`，失败自动回退规则；关闭时零模型请求。详见 1.4。
-- 不读取密钥，不访问网络大模型或付费 API；只允许用户在开关打开后访问自己填写的本机/Tailscale Ollama 地址
+- **本轮（本地模型主流程）**：整体描述直接交给本机/Tailscale 上的 Ollama `qwen3.5:4b`，模型自己理解、拆成六个中英对照字段并给出负向英文；中文可逐项修改，改后对应英文标「待更新」，点「重新生成英文」只重译待更新字段并保留用户中文。失败只报错并保留编辑，不再静默回退词库。详见第 7 节。
+- 不读取密钥，不访问网络大模型或付费 API；主流程只请求用户配置的本机/Tailscale Ollama 地址
+
+> 说明：1.1–1.5 是之前轮次的历史记录，其中「可选/回退规则」的描述已被第 7 节的本地模型主流程取代；当前行为以第 7 节、README 和页面文案为准。
 
 ### 1.1 上一轮追加：未收录反馈通道
 
@@ -202,7 +204,9 @@
 - 既有 29 项全部继续通过，包括「拒绝抽烟的广告」「小狗在车轮上撒尿」「走在沙滩上」、告示固定短语、禁止吸烟 ≠ 吸烟、短别名不切长词、补全默认关闭后显式开启的记录、待补录导出。
 - 不宣称覆盖率 99%，也没有给出没有依据的准确率。
 
-### 1.4 本轮追加：可选接入本机 Ollama 解析（默认关闭）
+### 1.4 历史追加：可选接入本机 Ollama 解析（默认关闭；已被第 7 节取代）
+
+> 后续变更：1.5 起，本地模型成功时英文直接来自模型，不再由 `scene.js` / `translator.js` 的词典生成。本节中“英文仍由词典翻译生成”的描述属于 1.4 的历史实现；规则/失败路径仍保持本节行为。
 
 本轮只在现有项目上加一个**可选开关**，不改规则编译器作为默认和回退路径。没有另起项目，没有改 `ant-architect`，没有调用网络大模型接口，没有读取或打印密钥，没有 push，也没有发布 GitHub Pages；没有改 Tailscale / Ollama 的系统配置，没有启动或杀掉 Lustify / ComfyUI / Ollama，也没有 pull 新模型。
 
@@ -263,6 +267,50 @@
   - 只给 `scopes` 的纯排除约束也能保留否定并生成 `watermark on background`。
 - 另外用临时 jsdom（不随项目发布）做了界面流程检查：默认关闭零请求、网络错误回退、成功 JSON 后场景面板显示「本地模型编译」且生成输出、无效 JSON 回退、再次关闭零请求、运行中点「中止」回退、运行中关闭开关中止且不残留状态。没有读取真实 Ollama，也没有启动/停止任何服务。
 - 本轮没有宣称覆盖率 99%，也没有给出没有依据的准确率。
+
+
+### 1.5 历史追加：本地模型成功时自己翻译并分解（第 7 节已改为主流程）
+
+**背景与目标。** 用户指出：调用本地模型时不需要参照词库，参照词库反而降低效率和翻译准确度，应让模型自己翻译并分解。上一版虽然让模型给出原文片段和场景结构，但英文仍由 `scene.js` 的 `TR.translateZhPhrase`、`parseSubjectPhrase` / `parseOutfitPhrase` / `parseObjectPhrase` 生成，词库实际上仍是英文来源。本轮只修这个问题，不另起项目，不改 `ant-architect`，不改 Tailscale / Ollama 系统配置，不启动 / 停止 / 卸载 Ollama、Lustify、ComfyUI，不拉取或删除模型，不读取或打印密钥，不 push，不发布 GitHub Pages，不宣称 99%。
+
+**系统提示与 JSON 约定（`js/local-llm.js`）。**
+
+- 只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 `<think>`。
+- 每个有中文的片段都要同时给出 `text`（用户原文连续子串，逐字复制）和 `en`（模型自己翻译的英文，自然、简洁、适合文生图逗号分隔提示词）。
+- 明确要求不要参照、检索或模仿任何外部词库、词典或固定译法；按上下文自己翻译。
+- 不要编造用户没说的光线、镜头、景深、画风、身份、人数、服装、颜色、动作或剧情。
+- 否定/禁止保持原意：告示牌「禁止吸烟」给 `smoking prohibited` / `no smoking sign`，不能只写 `smoking`；画面里不要吸烟则进 `negations`，并给被排除概念的 `target_en`。
+- `units` 覆盖原文全部实义内容；结构字段扩展 `en` / `target_en` / `exception_en` / `distance_en`，`attributes`、`color` 允许 `{text, en}` 对象，也兼容字符串 + `*_en`。
+- 示例同时示范 `text` 与 `en`，并注明不得照抄示例内容。请求协议保持 `POST {apiRoot}/api/chat`、`think:false`、非流式、超时与中止不变，只发系统说明 + 用户原文；没有把整部词库塞进请求。
+
+**`fromSpec` 成功路径禁用词库（`js/scene.js`）。**
+
+- `fromSpec(spec, raw, { source: 'local-llm' })` 默认走新的 `fromSpecLocal`；只有显式 `{ source: 'rule' }` 才复用旧的 `fromSpecLegacy`。规则编译器 `compile()` 及其词典解析完全不动。
+- 本地成功路径的英文只读规格里的 `en`、`target_en`、`exception_en`、`distance_en`、`color.en`、`attributes[].en`；不调用 `TR.translateZhPhrase` / `TR.translateZh` / `TR.translateEn`，也不走 `parseSubjectPhrase` / `parseOutfitPhrase` / `parseObjectPhrase`、`specSpan`、`specColor`、`expandNegationTarget` 或 `conceptTranslation`。
+- 不再用规则编译器重拆关系句；关系 `verify` 只从模型给的 `verify` / `en` / 对应实体英文来。
+- 某条缺 `en` 时留空，不拿词库补。关键 units 缺英文达到半数时，`validateSpec` 返回 `invalid-spec` 并回退规则；否定和纯排除作用域必须有 `target_en` / `en`，带例外的作用域必须有 `exception_en`，否则也回退，避免负面约束悄悄丢失。
+- `finalizeScene` 对 `englishFrom === 'model'` 的场景不再把中文回填进英文、不再做词典 fallback 拆句；颜色错绑的词典全表检查在本地路径跳过，保留已有的对象颜色绑定检查。
+- 校对时颜色绑定允许模型给完整名词短语（`a blue car` + `blue`），不会误报成 `blue, car`。
+
+**组装、六框与界面（`js/slot-fill.js`、`js/assemble.js`、`js/complete.js`、`js/app.js`）。**
+
+- `slot-fill.js` 在本地来源时跳过英文回译；`assemble.js` 在本地来源时跳过缺中文的 `TR.translateEn` 兜底，并且不追加规则质量词；`complete.js` 在本地来源时直接跳过规则补全。组装只做去重、排序、标点整理。
+- `app.js` 用 `localSlots` 标记当前六框来自本地成功解析：`ensureEnglishForAllSlots` 不再用词库补缺英文，`recomputeUnknownBySlot` / `collectFeedback` 不再按词库算未收录，中文或英文输入不再自动用词典覆盖另一侧；用户手工改框仍然直接生效。打开历史记录时清除该标记。
+- 成功状态文案改为「由模型自己分解并翻译，未参照词库；原文覆盖与否定守恒检查通过」，不再强调「有 N 处词库未收录」或「六个框由这棵场景树经同一套规则生成」。场景面板本地标题改为「本地模型自己分解并翻译（未参照词库） · 英文直接来自模型输出」。
+
+**校验。**
+
+- `coverageGaps` / `inventedSpans` 只校验中文 `text` / `target` / `exception` / 属性 / 颜色 / 距离等原文片段；`en` 不参与「编造中文」判断，也不要求是原文子串。
+- 否定守恒仍检查「禁止 / 不要 / 请勿」等 cue 是否被改成肯定；告示牌单元的英文必须保留 `no / prohibited / forbidden / banned` 等否定含义。
+- 改写中文原文、漏写实义、把否定改成肯定，仍失败并回退。
+
+**测试与文档。**
+
+- `node tests/core.test.js` → **36 项全部通过**，规则路径未被改坏。
+- `node tests/local-llm.test.js` → **21 项全部通过**（mock，不请求真实 Ollama），新增/更新覆盖：模型英文覆盖词库译法（词库是 `woman with short hair` / `beige trench coat`，模型给 `short bob` / `cream trench coat`，断言模型英文胜出、词库译法不出现）；成功路径 `Translator` 零调用；关键 units 大量缺 `en` 回退 `invalid-spec` 且规则路径仍可用；告示牌 `smoking prohibited` 不退化；原有无效 JSON、结构不合法、改写、漏写、否定丢失、超时、网络、403、关闭零请求等继续有效。
+- `index.html`、`README.md` 的本地模型说明已改成「模型自己分解并翻译、不参照词库；关掉或失败仍用规则 + 词库」。没有改 `?v=` 时间戳，没有改词库内容，没有宣称覆盖率数字。
+
+**已知边界。** 本地成功路径允许少量（低于半数）units 缺 `en`，这些条目会留空而没有词库兜底；这是为了遵守「不拿词库覆盖模型」。如果模型大面积缺 `en`，整次按 `invalid-spec` 回退规则，不会假装完整。
 
 ## 2. 算法步骤
 
@@ -838,6 +886,18 @@
 - 开关关闭零请求；规则路径仍能生成正负面。请求体只有 2 条 message（system + user），`think:false`，`stream:false`，`format:"json"`，系统提示 < 4,000 字符，不含整部词库。
 - 临时 jsdom 检查了开关、状态行、连接设置、中止按钮、localStorage 和生成输出；这些工具不随项目发布。
 
+
+### 4.9 本轮本地模型翻译回归
+
+- `node tests/core.test.js` → **36 项全部通过**；`node tests/local-llm.test.js` → **21 项全部通过**。
+- 成功样例刻意让模型英文不同于词库：词库会译 `woman with short hair` / `beige trench coat`，模型给 `a woman with a short bob` / `wearing a cream trench coat`；六框、最终正面和场景实体都使用模型英文，正面里不出现 `beige` 或 `woman with short hair`。
+- 成功路径把 `TR.translateZh` / `TR.translateEn` / `TR.translateZhPhrase` 替换成会计数的函数后，调用次数为 0，证明本地成功路径没有查词库补英文。
+- 缺英文样例：4 个 units 里 3 个没有 `en`，回退 `invalid-spec`；随后用 `Parser.parse` + `Assemble` + `Negative` 验证规则路径仍能给出可用正负面。
+- 否定与告示牌：`画面里不要有水印` 用模型 `target_en: watermark` 进入负面；`禁止吸烟` 作为告示牌单元用 `smoking prohibited`，正面不退化成单纯 `smoking`。
+- 关系与颜色：`a girl wearing a red dress, standing next to a blue car` 通过守恒检查，不出现 `blue, car`；对象 `a blue car` + `blue` 正确绑定。
+- 请求体仍只有 system + user，`think:false`、`stream:false`、`format:"json"`，系统提示 < 4,000 字符，不含整部词库，但明确要求模型自己翻译并保留否定。
+
+
 ## 5. 已知局限 / 仍可能缺的类别
 
 
@@ -861,16 +921,192 @@
 12. **单字别名边界规则偏保守**：未收录的复合词（如「笑点」）会整体保留原文，而不是拆成「已知单字 + 残片」。这是为了避免「抽烟 → 拒绝抽 + 烟」这类误切；后续遇到新词应补独立词条，而不是放宽边界规则。
 13. **待补录只在本机**：数据存在当前浏览器 `localStorage`，不跨设备、不自动同步；清理浏览器数据会丢失。GitHub issue 必须由用户手动确认提交，页面不会自动建 issue，也不含 token。
 14. **「词库已可命中」只是当前版本的判断**：它表示当前词典能完整翻译该片段，不代表所有上下文都自然；复杂说法仍以人工补词和回归测试为准。
-15. **本地模型是可选增强，不是默认路径**：首次加载 `qwen3.5:4b` 可能要十几秒；需要 Ollama 在跑、电脑不休眠、Tailscale Serve 可访问，并且 Ollama 的 CORS 放行 `https://zhangteng945.github.io`。任何一环不满足都会回退规则；规则结果仍然可能不完整，界面会标出未收录内容。
-16. **本地模型结果会被严格校验**：模型必须逐字复制原文片段并覆盖全部实义内容；同义改写、漏写、编造、否定丢失都会整次回退，而不是局部采纳。这样更保守，但复杂长句可能因此退回规则。
+15. **本地模型是主流程，但依赖本机服务**：首次加载 `qwen3.5:4b` 可能要十几秒；需要 Ollama 在跑、电脑不休眠、Tailscale Serve 可访问，并且 Ollama 的 CORS 放行当前 Origin。任何一环不满足都会明确报错并保留编辑，不会自动回退规则；规则结果只能由用户点「改用规则生成（次要）」得到。
+16. **模型语义仍无法逐字证明**：本轮不再要求模型中文必须是原文连续子串，因为那会把「允许中文偏离、由用户改正、再重译」的主流程卡死。现在校验中英字段齐全、英文可用、负向提示词可用、补全标记合法；但「模型是否多写了原文没有的一个表情/一缕晨光」无法可靠机器判定。2026-11-24 的真实调用里曾出现把「侧脸」「晨光」写进非补全字段，之后已收紧系统提示词和示例（去掉侧脸、明确光线只放 light）。若仍遇到，用户可改中文后重译，或直接改英文；页面不宣称已自动消除所有语义偏差。
 
 ## 6. 文件清单
 
 - `index.html`、`styles.css`
-- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/scene.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/feedback.js`、`js/local-llm.js`、`js/app.js`
+- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/scene.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/feedback.js`、`js/local-llm.js`、`js/prompt-flow.js`、`js/app.js`
 - `js/lexicon.js` 内含 `GROUPS`、`EXTRA_GROUPS`、`COVERAGE_GROUPS` 人工词条，以及 `GARMENT_COLOR_ZH`、`MATERIAL_GARMENTS_ZH`、`PATTERN_GARMENTS_ZH` 等受限组合规则；`js/app.js` 内含搜索、收藏、历史、待补录面板、预览和 localStorage 逻辑
 - `tests/core.test.js`、`tests/local-llm.test.js`
 - `feedback/schema.json`、`feedback/README.md`
 - `.github/ISSUE_TEMPLATE/lexicon-feedback.md`
 - `BRIEF-process-feedback.md`
 - `README.md`、`REPORT.md`
+
+
+## 7. 本轮（2026-11-24 18:37 CST）：本地模型主流程
+
+本轮把页面从「规则 + 词库默认，本地模型可选」改成「本地模型主流程，规则是明确标注的次要选项」。没有另起项目、没有 clone、没有改 `/Users/zhangteng/ant-architect`。
+
+### 7.1 产品流程
+
+1. 用户写整体中文描述，点「用本地模型拆解并翻译」。
+2. `qwen3.5:4b` 返回六个字段的中英对照（`person / outfit / pose / scene / light / style`）和英文负向提示词。请求带 `think:false`，不携带词库，成功路径不调用 `Translator`、`Parser` 或词库。
+3. 用户逐项改中文；对应英文立刻标「英文待更新」，该框英文 textarea 变暖色提示，最终输出被隐藏。
+4. 点「重新生成英文」：请求带原始描述、六个当前中文、六个当前英文和当前 negative；页面只把待更新字段的新英文写回，并清掉对应 stale。中文永远保留用户版本，模型即使回写中文也会被忽略。重译期间如果用户又改中文，本次结果直接丢弃，保留最新编辑。
+5. 有字段待更新时，点「生成正/负提示词」会被拦住，不能复制过期英文。重译成功后才自动刷新正/负输出并记录历史。
+6. 复制正面/负面英文、完整对照预览、搜索、收藏、历史、待补录继续可用。
+7. 模型失败时显示具体原因；已有中文、英文、stale 标记原样保留。规则路径只有点「改用规则生成（次要）」才执行，并在状态、输出 meta 和脚注里标明「规则次要路径」。
+
+### 7.2 实现要点
+
+- **`js/local-llm.js` 重写为主流程 API**：
+  - `buildGenerateRequest` / `generate`：整体描述 → 六字段 + negative；
+  - `buildRetranslateRequest` / `retranslate`：当前中文 → 待更新英文字段；
+  - 请求体仍是 system + user 两条 message，`stream:false`、`think:false`、`format:"json"`，系统提示 1,784 字符（关闭补全时），不含词库；
+  - 失败统一返回 `status:'error'`，不再返回 `fallback`，不再在本地层调用规则；
+  - 错误分类：`invalid-json`、`missing-english`、`empty-negative`、`inferred`、`timeout`、`network`、`cors`、`http`、`server` 等，UI 给出对应原因。
+- **`js/prompt-flow.js` 新增**：
+  - 中文改动：`stale=true`（中文清空但英文还在也标待更新）；
+  - 英文手改：清掉 stale；
+  - `pendingKeys` 汇总待更新/缺英文字段；
+  - `applyEnglish` 只在目标字段英文全部合格时整体写入，任一缺英文就整体不落盘；中文清空时允许写回空英文；
+  - 旧收藏/历史 `pendingEnglish` 兼容为字段 stale。
+- **`js/app.js`**：
+  - 主按钮固定走模型；规则按钮是独立、显式、带「次要」字样的操作；
+  - 失败路径只设置 error 状态，不调用 `fillFromParsed` / `Parser`（测试里有静态护栏）；
+  - `fillFromModel` 直接使用模型字段，不建场景树、不查词库；
+  - 重译只更新 pending 字段，中文不从模型回写；
+  - 任何六框编辑都隐藏旧输出；本地路径存在 pending 时 `generate()` 拒绝执行；
+  - 「允许模型推测未提示要素」替代原「允许规则补全」，默认关闭，只用于模型拆解；开启后 `inferred` 只允许 `light/style`，框上标「补全」；
+  - 收藏/历史升级到 `version:2`，保存 `source`、`model`、`infer`、每字段 `stale/inferred`、`pendingEnglish`、`staleEnglish`；打开本地历史时若保存时就待更新，不自动重译、不自动生成，先提示用户点重译；
+  - 连接设置仍存 `localStorage` 的 `t2i.localLLM.v1`，旧记录里的 `enabled:false` 不再能关掉主流程。
+- **`index.html` / `styles.css`**：
+  - 文案改成「本机模型主流程」；主按钮「用本地模型拆解并翻译」；规则按钮「改用规则生成（次要）」；
+  - 新增「重新生成英文」按钮、英文同步状态行、每字段「英文待更新」/「补全」徽标和 stale 边框；
+  - 模型失败/重译失败使用红色 error 状态；规则路径使用灰色 secondary 状态；
+  - 缓存戳保持原有 `?v=20261124-1440`，没有改成未来时间戳。
+- **未改**：词库内容、Ollama/Tailscale 系统配置、`keep_alive`、CORS、Serve、模型文件、缓存戳、敏感词库；没有 push，没有 GitHub Pages 发布；目录本身当前没有 git 仓库。
+
+### 7.3 测试
+
+完整输出见本节末尾。两项指定命令均通过：
+
+- `node tests/core.test.js` → **36 项全部通过**（不改词库内容；既有规则/场景/反馈回归继续通过）。
+- `node tests/local-llm.test.js` → **26 项全部通过**（mock fetch，不依赖 Ollama）。
+
+`local-llm.test.js` 新增/覆盖：
+
+- 成功拆解六字段中英对照 + negative；
+- 成功路径 `Translator` 零调用、`Parser` 零调用；
+- 请求体 `think:false`、非流式、不含词库；
+- 补全默认关闭时拒绝 `inferred`；开启时只允许 `light/style` 并标 inferred；
+- 无效 JSON、中文缺英文、英文含中文、缺 negative、超时、网络、HTTP 403 都是 `error`，不是 fallback；
+- 中文改动 → stale；重译请求带用户当前中文和原始描述；重译结果里模型回写中文会被忽略，用户中文保留；
+- 重译失败/超时/缺 pending 英文时中文、旧英文、stale 全保留；
+- 中文清空 → 英文标 stale；重译返回空英文时只清对应英文；
+- 历史 `pendingEnglish` 兼容；
+- 规则路径只能在测试里显式调用 `Parser` 才产生结果；app 失败路径静态护栏断言不调用 `fillFromParsed` / `Parser`。
+
+**临时最小 DOM 冒烟**（不随项目发布）：模型成功填充 → 改中文标待更新 → 重译成功更新英文并保留中文 → 自动刷新输出 → 收藏/历史保存 `source` 与每字段 stale → 模型失败保留编辑并显示 error → 显式规则按钮进入 secondary 路径。通过。
+
+### 7.4 真实本机 API 实测
+
+- 只做读取和正常请求，没有改 Ollama / Tailscale 配置，没有启停服务，没有拉取/删除模型。
+- `GET /api/tags` → HTTP 200，能看到 `qwen3.5:4b`。
+- 拆解：短日常描述「清晨咖啡馆，短发女孩坐在窗边看书，白衬衫和牛仔裤，柔和窗光」→ `status:ok`，约 19.96 秒；六个字段有中英对照，negative 为 `low quality, blurry, watermark`，`inferred:[]`。
+- 改中文后重译：把 pose 中文改成「站起来走向咖啡馆门口，手里拿着一本合上的书」→ `status:ok`，约 8.48 秒；只返回 pose 新英文 `standing up and walking towards the coffee shop entrance holding a closed book in her hand`；应用后 pose 中文仍为用户修改版，`pending` 清空。
+- 观察到的语义小偏差：拆解那次把「侧脸」写进 person、把「晨光」写进 scene，虽然 `inferred` 为空。已据此收紧系统提示词和示例（去掉侧脸示例，明确光线只放 light、不要补视线/表情），并在第 5 节局限里写明；没有宣称模型语义已可机器完全证明。
+
+真实调用输出（节选）：
+
+```text
+status: ok, code: ok, elapsedMs: 19959, inferred: []
+person.zh: 短发女孩，侧脸专注看书
+person.en: a girl with short hair, seen in profile reading a book intently
+pose.zh: 坐在窗边看书
+pose.en: sitting by the window reading a book
+negative: low quality, blurry, watermark
+
+retranslate status: ok, code: ok, elapsedMs: 8480, pending: ["pose"]
+pose.en: standing up and walking towards the coffee shop entrance holding a closed book in her hand
+POSE_ZH_PRESERVED true
+PENDING_AFTER []
+```
+
+### 7.5 指定测试完整输出
+
+（本节由本轮实际运行输出粘贴；共 36 + 26 项。）
+
+```text
+ok  词典规模落在覆盖率最佳点
+ok  中文短语按语境翻译
+ok  英文反向翻译自然且可对照
+ok  高频中文外貌说法必须命中正确规范词并译出英文
+ok  高频英文外貌词及人物组合必须命中正确类别
+ok  示例想法拆进六个框
+ok  关系句式先拆角色再组装：给…上 / 对着 / 在…上
+ok  关系句按角色分框：动作留姿态，地点进场景，最终英文仍自然
+ok  日常高频动作、物体、动物和氛围都能独立命中
+ok  换词回归：换物体、动物、动作、氛围后关键零件仍然命中
+ok  公共标识固定短语整条命中，不被动作词拆丢
+ok  禁止吸烟与吸烟是两条语义，禁止吸烟不得退成单纯 smoking
+ok  本轮新增规范词都保持唯一并能中英互译回自己
+ok  短别名不切开长词：拒绝抽烟的广告拆成主题动作 + 媒介
+ok  短别名边界：搞笑画面不拆出 smiling，香烟/小猫在边界仍命中
+ok  通用短别名边界规则：所有单字别名都不能从复合词中间命中
+ok  英文短词不能切开带连字符的长词
+ok  补全默认关闭，显式开启后才在缺失维度发生并留下记录
+ok  已有光线镜头时不重复补全
+ok  未收录内容保留原文并提示
+ok  纯英文提示词也能分框
+ok  组装顺序和用户修改生效
+ok  负面提示词覆盖常见问题并能避让冲突
+ok  复杂服装、材质、发型、光效、镜头和场景都能命中
+ok  重复片段不会重复组装
+ok  未收录待补录：过滤纯标点、同词去重、累计次数并保留最近上下文
+ok  待补录导出符合固定 schema，字段齐全且文件名稳定
+ok  补录清单同时含 Markdown 与 JSON，并可预填 GitHub issue
+ok  当前词库已命中的待补录词可标记，备注、删除和本机存储可往返
+ok  结构化场景：长发女孩穿着白色连衣裙是对象-属性-关系，不是扁平标签
+ok  对象-属性-关系：红衣女孩站在蓝色汽车旁，远处有一座白色房子
+ok  否定、并列、转折与作用范围：局部否定不升级成全局 blur
+ok  肢体动作：女人张开五指拆成主体 + 手部动作，不残留中文或 pointing forward
+ok  动作与地点分框，英文从同一结构自然生成
+ok  多候选切分保留歧义，不在长词上直接拍板
+ok  语义守恒检查：否定变肯定、未翻译残留和擅自补光都会阻止完整
+
+36 tests passed.
+```
+
+```text
+ok  成功：整体描述拆成六字段中英对照、负向提示词，英文直接来自模型
+ok  成功路径不调用 Translator / 词库补英文
+ok  成功路径不调用 Parser / 规则编译器（不静默走规则）
+ok  请求体：系统说明 + 用户原文，think:false、非流式，不包含词库
+ok  补全开关：关闭时提示不要补，开启时只允许 light/style
+ok  think 标签与代码围栏残留会被清掉，JSON 仍可解析
+ok  无效 JSON → status:error / invalid-json，不伪造 fallback
+ok  中文有内容但英文缺失 → status:error / missing-english，绝不用词库补
+ok  英文里残留中文 → 判为不可用，不把中文当英文
+ok  缺少英文负向提示词 → status:error / empty-negative
+ok  补全默认关闭：模型返回 inferred 时拒绝，避免把推测当原文
+ok  补全开启：light 允许 inferred 并标记；人物补全仍拒绝
+ok  补全开启也只允许 light/style：inferred 里出现 person 直接报错
+ok  超时 → status:error / timeout，挂起 fetch 被中止；不返回规则结果
+ok  网络错误 → status:error / network，并提示模型没开/休眠/Tailscale/跨域
+ok  HTTP 403 → status:error / cors，不返回任何槽位
+ok  中文改动 → 对应英文 stale；重译成功更新英文且保留用户中文
+ok  中文清空 → 英文标 stale；重译返回空英文时清空对应英文，其他字段不动
+ok  重译失败（网络）保留已有中文、英文和 stale 标记，不自动用词库
+ok  重译结果缺 pending 字段 → error / missing-english，整体不落盘
+ok  重译超时 → error / timeout，已有编辑不变
+ok  规则路径只在显式调用时执行：模型失败后手动跑 Parser 仍可用
+ok  设置读写：默认主流程、infer 默认关闭、旧 enabled:false 不再关掉模型
+ok  历史兼容：旧记录 pendingEnglish 会恢复为字段 stale
+ok  中文改动 / 英文手改的 stale 规则可逆，重译只碰传入字段
+ok  app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）
+26 tests passed.
+```
+
+### 7.6 本轮未做 / 边界
+
+- 未训练、微调模型，未改 Ollama 模型文件，未拉取/删除模型。
+- 未改 Tailscale / Ollama 系统配置（Host 改写代理、Serve、CORS、`keep_alive`），未绑 `0.0.0.0`，未开 Funnel。
+- 未启动、停止或卸载 Ollama / Lustify / ComfyUI，未启动 SDXL 生图。
+- 未做词库去敏感化，未扩词库（规则路径回归未误伤，无需补词）。
+- 未把 `?v=` 改成未来时间戳；保持 `20261124-1440`。
+- 未 push、未发布 GitHub Pages。
+- 不宣称 99%。

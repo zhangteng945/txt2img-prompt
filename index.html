@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="规则与词典驱动的中文文生图提示词生成器：先编结构化场景，再从同一棵树投影六个框和最终提示词；可选择接入本机 Ollama，失败自动回退规则。支持词库搜索、收藏、历史、未收录待补录反馈，默认不自动补光线镜头。">
+  <meta name="description" content="本机模型主流程的中文文生图提示词工作台：整体描述交给本机 Ollama 拆成六个中英对照字段，可直接改中文后重新生成英文；模型失败会报错并保留编辑，不静默回退词库。规则生成是明确标注的次要选项。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1440">
+  <link rel="stylesheet" href="styles.css?v=20261124-1840">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -20,8 +20,8 @@
       </span>
     </a>
     <div class="header-badges" aria-label="产品特性">
-      <span>默认纯本地</span>
-      <span>可选本机模型</span>
+      <span>本机模型主流程</span>
+      <span>规则可选</span>
       <span>手机可用</span>
     </div>
   </header>
@@ -31,13 +31,13 @@
       <div class="hero-copy">
         <p class="eyebrow">中文想法 → SDXL / ComfyUI 英文提示词</p>
         <h1 id="hero-title">把一句想法，<br><em>拆成能生图的提示词。</em></h1>
-        <p class="lede">先编一张结构化场景：主体、服饰、物体、动作与关系各归其位，再从同一棵树生成中英提示词。六个框都能中英对照修改；默认不自动补光线/镜头/画风，补全需手动开启。</p>
+        <p class="lede">整段描述直接交给本机模型理解、拆成六个中英对照字段。哪段中文偏离原意就改哪段，再点「重新生成英文」；英文始终以你改过的中文为准，不会被偷偷改回去。模型不可用会明确报错并保留已有编辑，不会静默换成词库结果。</p>
       </div>
 
       <div class="idea-card">
         <div class="idea-card-head">
-          <label for="idea">整体想法</label>
-          <span class="microcopy">中文为主，可夹英文</span>
+          <label for="idea">整体描述</label>
+          <span class="microcopy">中文为主，可夹英文；交给本机模型拆解</span>
         </div>
         <textarea id="idea" rows="5" maxlength="1600" placeholder="例如：傍晚街边，短发女人穿米色风衣站着，侧脸看向远处，柔和自然光，电影感" spellcheck="false"></textarea>
         <div class="idea-meta">
@@ -56,22 +56,19 @@
         <div class="hero-actions">
           <button type="button" id="fillBtn" class="button button-primary">
             <span class="button-icon" aria-hidden="true">↳</span>
-            解析并填入各框
+            用本地模型拆解并翻译
           </button>
+          <button type="button" id="ruleFillBtn" class="button button-ghost">改用规则生成（次要）</button>
           <button type="button" id="resetBtn" class="button button-ghost">清空</button>
         </div>
         <label class="completion-toggle" for="allowCompletion">
           <input type="checkbox" id="allowCompletion">
-          <span>允许规则补全（默认关闭）</span>
-          <small>仅在勾选后补光线、镜头、画风；不编造人物、服装、伤势或情绪</small>
+          <span>允许模型推测未提示要素（默认关闭）</span>
+          <small>仅允许补光线/镜头/画风，并在框上标「补全」；不会编造身份、剧情、服装、颜色或动作。重译时也不会重新补全。</small>
         </label>
 
         <div class="local-llm">
-          <label class="completion-toggle local-llm-toggle" for="localLLMEnabled">
-            <input type="checkbox" id="localLLMEnabled">
-            <span>使用本地解析模型（默认关闭）</span>
-            <small>打开后由本机 Ollama 的 qwen3.5:4b 先编译场景；关掉、超时、跨域、模型没开或返回无效都会自动回退规则编译器，不会留下空提示词</small>
-          </label>
+          <p class="local-llm-primary"><strong>主流程：本机 Ollama qwen3.5:4b</strong> · 模型自己理解、分解并翻译；请求不携带词库，也不用词库改写模型英文。失败只报错并保留编辑。</p>
           <details class="local-llm-config">
             <summary>连接设置（当前 Ollama 无鉴权，不需要密钥）</summary>
             <div class="local-llm-fields">
@@ -117,10 +114,18 @@
     <section class="workflow" aria-labelledby="workflow-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">第二步 · 校对</p>
+          <p class="eyebrow">第二步 · 校对与重译</p>
           <h2 id="workflow-title">六个框，中英对照</h2>
         </div>
-        <p class="section-note">改中文或英文都可以：能对上词典时自动同步另一侧，对不上的原文会保留。</p>
+        <div class="workflow-head-side">
+          <p class="section-note">模型初稿可逐项改中文。中文一改，对应英文立即标「待更新」；点「重新生成英文」只重译待更新字段，并带上其余字段和原始描述作为上下文。</p>
+          <div class="workflow-actions">
+            <p id="englishSyncNote" class="english-sync-note" role="status" aria-live="polite">模型拆解后，这里会显示英文同步状态。</p>
+            <button type="button" id="retranslateBtn" class="button button-outline retranslate-button" disabled>
+              重新生成英文
+            </button>
+          </div>
+        </div>
       </div>
 
       <div id="scenePanel" class="scene-panel" aria-live="polite" hidden></div>
@@ -128,7 +133,7 @@
       <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
         <span class="warning-icon" aria-hidden="true">!</span>
         <div class="warning-copy">
-          <strong id="warningTitle">有未收录内容</strong>
+          <strong id="warningTitle">校验提示</strong>
           <p id="warningText"></p>
           <button type="button" id="warningFeedbackBtn" class="warning-action">查看待补录</button>
         </div>
@@ -141,9 +146,12 @@
       <div class="generate-copy">
         <p class="eyebrow">第三步 · 组装</p>
         <h2 id="generate-title">生成最终提示词</h2>
-        <p>使用当前六个框里的英文；未改动的中文会先按词典补成英文。顺序为：主体 → 服装 → 姿态 → 场景 → 光线镜头 → 画风 → 少量质量词。</p>
+        <p>只用当前六个框里的英文组装。本地模型路径不查词库、不自动补质量词；有中文改了但英文还没重译时，会先拦住，避免复制过期英文。顺序为：人物 → 服装 → 姿态 → 场景 → 光线镜头 → 画风。</p>
       </div>
-      <button type="button" id="generateBtn" class="button button-dark button-large">生成提示词 <span aria-hidden="true">→</span></button>
+      <div class="generate-actions">
+        <button type="button" id="generateBtn" class="button button-dark button-large">生成正/负提示词 <span aria-hidden="true">→</span></button>
+        <span class="generate-hint">英文待更新时不会放行</span>
+      </div>
     </section>
 
     <section id="outputSection" class="output-section" aria-labelledby="output-title" hidden>
@@ -205,7 +213,7 @@
     </section>
 
     <footer class="site-footer">
-      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板；可选接入本机 Ollama，默认关闭，不上传数据。</p>
+      <p><strong>大肥鱼提示词工坊</strong> · 本机模型主流程；规则 + 词典是明确标注的次要选项。模型自己分解与翻译，不参照词库，内容不上传。</p>
       <p>兼容 Lustify Endgame（SDXL）与 ComfyUI。提示词可继续按你的模型习惯微调。</p>
     </footer>
   </main>
@@ -250,7 +258,7 @@
           </div>
         </article>
       </div>
-      <p class="preview-footnote">预览为最近一次生成结果；末尾质量词为算法补全。</p>
+      <p class="preview-footnote">预览为最近一次生成结果。本地模型路径的英文来自模型，未使用词库；若有中文待重译，生成会被拦住。</p>
     </section>
   </div>
 
@@ -306,17 +314,18 @@
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1440"></script>
-  <script src="js/lexicon.js?v=20261124-1440"></script>
-  <script src="js/translator.js?v=20261124-1440"></script>
-  <script src="js/scene.js?v=20261124-1440"></script>
-  <script src="js/parser.js?v=20261124-1440"></script>
-  <script src="js/slot-fill.js?v=20261124-1440"></script>
-  <script src="js/complete.js?v=20261124-1440"></script>
-  <script src="js/assemble.js?v=20261124-1440"></script>
-  <script src="js/negative.js?v=20261124-1440"></script>
-  <script src="js/feedback.js?v=20261124-1440"></script>
-  <script src="js/local-llm.js?v=20261124-1440"></script>
-  <script src="js/app.js?v=20261124-1440"></script>
+  <script src="js/utils.js?v=20261124-1840"></script>
+  <script src="js/lexicon.js?v=20261124-1840"></script>
+  <script src="js/translator.js?v=20261124-1840"></script>
+  <script src="js/scene.js?v=20261124-1840"></script>
+  <script src="js/parser.js?v=20261124-1840"></script>
+  <script src="js/slot-fill.js?v=20261124-1840"></script>
+  <script src="js/complete.js?v=20261124-1840"></script>
+  <script src="js/assemble.js?v=20261124-1840"></script>
+  <script src="js/negative.js?v=20261124-1840"></script>
+  <script src="js/feedback.js?v=20261124-1840"></script>
+  <script src="js/local-llm.js?v=20261124-1840"></script>
+  <script src="js/prompt-flow.js?v=20261124-1840"></script>
+  <script src="js/app.js?v=20261124-1840"></script>
 </body>
 </html>

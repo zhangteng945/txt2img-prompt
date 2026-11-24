@@ -41,13 +41,29 @@ function pipeline(text) {
   return { parsed: parsed, slots: completed.slots, added: completed.added };
 }
 
-test('词典规模足够', function () {
-  assert.ok(T.Lexicon.stats.canonicalEntries >= 15000);
-  assert.ok(T.Lexicon.stats.manualEntries >= 1400);
-  assert.ok(T.Lexicon.stats.generatedEntries >= 15000);
-  assert.ok(T.Lexicon.stats.zhAliases >= 30000);
-  assert.ok(T.Lexicon.stats.enAliases >= 18000);
-  assert.ok(T.Lexicon.stats.categories >= 22);
+test('词典规模落在覆盖率最佳点', function () {
+  const stats = T.Lexicon.stats;
+  assert.ok(stats.canonicalEntries >= 10000);
+  assert.ok(stats.canonicalEntries <= 15000);
+  assert.ok(stats.manualEntries >= 4000);
+  assert.ok(stats.generatedEntries >= 5000);
+  assert.ok(stats.generatedEntries <= 7000);
+  assert.ok(stats.zhAliases >= 19000);
+  assert.ok(stats.enAliases >= 14000);
+  assert.ok(stats.categories >= 22);
+
+  const byCategory = T.Lexicon.byCategory;
+  assert.ok(byCategory.scene.length >= 3000, 'scene 应该是覆盖主战场');
+  assert.ok(byCategory.outfit.length <= 2500, 'outfit 不应再靠笛卡尔积膨胀');
+  assert.ok(byCategory.outfit.length < byCategory.scene.length);
+  assert.ok(byCategory.pose.length >= 300);
+  assert.ok(byCategory.subject.length >= 400);
+  assert.ok(byCategory.appearance.length >= 200);
+  assert.ok(byCategory.expression.length >= 140);
+  assert.ok(byCategory.hair.length >= 500);
+  assert.ok(byCategory.light.length >= 450);
+  assert.ok(byCategory.camera.length >= 200);
+  assert.ok(byCategory.style.length >= 300);
 });
 
 test('中文短语按语境翻译', function () {

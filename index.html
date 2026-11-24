@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="本机模型主流程的中文文生图提示词工作台：整体描述交给本机 Ollama 拆成六个中英对照字段，可直接改中文后重新生成英文；模型失败会报错并保留编辑，不静默回退词库。规则生成是明确标注的次要选项。">
+  <meta name="description" content="本机模型主流程的中文文生图提示词工作台：整体描述交给本机 Ollama 拆成六个中英对照字段，可直接改中文后重新生成英文；模型给出英文后会做独立回译核对和有限修正；状态分未核对/待确认/需确认/已校对，不把差异自动标成已确认。模型失败会报错并保留编辑，不静默回退词库。规则生成是明确标注的次要选项。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1909">
+  <link rel="stylesheet" href="styles.css?v=20261124-2006">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -31,7 +31,7 @@
       <div class="hero-copy">
         <p class="eyebrow">中文想法 → SDXL / ComfyUI 英文提示词</p>
         <h1 id="hero-title">把一句想法，<br><em>拆成能生图的提示词。</em></h1>
-        <p class="lede">整段描述直接交给本机模型理解、拆成六个中英对照字段。模型给出的英文是可直接粘贴的生图提示词短语，不是英语句子翻译。哪段中文偏离原意就改哪段，再点「重新生成英文」；英文始终以你改过的中文为准，不会被偷偷改回去。模型不可用会明确报错并保留已有编辑，不会静默换成词库结果。</p>
+        <p class="lede">整段描述直接交给本机模型理解、拆成六个中英对照字段。模型给出的英文是可直接粘贴的生图提示词短语，不是英语句子翻译。之后会把实际英文独立回译成中文，与你的当前中文逐项比对；发现差异时最多自动修正 1 轮并再次回译，仍不一致就标为「需确认」。中文始终是权威，不会被回译覆盖。模型不可用会明确报错并保留已有编辑，不会静默换成词库结果。</p>
       </div>
 
       <div class="idea-card">
@@ -118,7 +118,7 @@
           <h2 id="workflow-title">六个框，中英对照</h2>
         </div>
         <div class="workflow-head-side">
-          <p class="section-note">模型初稿可逐项改中文。中文一改，对应英文立即标「待更新」；点「重新生成英文」只重译待更新字段，并带上其余字段和原始描述作为上下文。</p>
+          <p class="section-note">模型初稿可逐项改中文。中文一改，对应英文立即标「待更新」；点「重新生成英文」只重译待更新字段，然后自动做独立回译核对。改英文后，原校对也会失效，可再点「回译核对」。回译是辅助，不是准确率保证，同一模型也可能同错。</p>
           <div class="workflow-actions">
             <p id="englishSyncNote" class="english-sync-note" role="status" aria-live="polite">模型拆解后，这里会显示英文同步状态。</p>
             <button type="button" id="retranslateBtn" class="button button-outline retranslate-button" disabled>
@@ -138,6 +138,23 @@
           <button type="button" id="warningFeedbackBtn" class="warning-action">查看待补录</button>
         </div>
       </div>
+
+      <section id="reviewPanel" class="review-panel" aria-labelledby="reviewTitle" hidden>
+        <header class="review-head">
+          <div>
+            <p class="eyebrow">双向语义校对</p>
+            <h3 id="reviewTitle">独立回译核对</h3>
+          </div>
+          <span id="reviewBadge" class="review-badge is-unverified">未核对</span>
+        </header>
+        <p id="reviewSummary" class="review-summary" role="status" aria-live="polite"></p>
+        <div id="reviewDiffList" class="review-diff-list"></div>
+        <div class="review-actions">
+          <button type="button" id="reviewBtn" class="button button-outline" disabled>回译核对</button>
+          <button type="button" id="confirmReviewBtn" class="button button-dark" disabled>确认当前对照</button>
+        </div>
+        <p class="review-note">回译由同一台本机模型完成，只用于辅助核对，不能保证 100% 准确；同一模型也可能犯同样的错。最终以你确认的中文和英文为准。校对失败时已有编辑会保留，不会静默改用词库。</p>
+      </section>
 
       <div id="slotGrid" class="slot-grid"><!-- app.js 渲染六个框 --></div>
     </section>
@@ -314,18 +331,19 @@
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1909"></script>
-  <script src="js/lexicon.js?v=20261124-1909"></script>
-  <script src="js/translator.js?v=20261124-1909"></script>
-  <script src="js/scene.js?v=20261124-1909"></script>
-  <script src="js/parser.js?v=20261124-1909"></script>
-  <script src="js/slot-fill.js?v=20261124-1909"></script>
-  <script src="js/complete.js?v=20261124-1909"></script>
-  <script src="js/assemble.js?v=20261124-1909"></script>
-  <script src="js/negative.js?v=20261124-1909"></script>
-  <script src="js/feedback.js?v=20261124-1909"></script>
-  <script src="js/local-llm.js?v=20261124-1909"></script>
-  <script src="js/prompt-flow.js?v=20261124-1909"></script>
-  <script src="js/app.js?v=20261124-1909"></script>
+  <script src="js/utils.js?v=20261124-2006"></script>
+  <script src="js/lexicon.js?v=20261124-2006"></script>
+  <script src="js/translator.js?v=20261124-2006"></script>
+  <script src="js/scene.js?v=20261124-2006"></script>
+  <script src="js/parser.js?v=20261124-2006"></script>
+  <script src="js/slot-fill.js?v=20261124-2006"></script>
+  <script src="js/complete.js?v=20261124-2006"></script>
+  <script src="js/assemble.js?v=20261124-2006"></script>
+  <script src="js/negative.js?v=20261124-2006"></script>
+  <script src="js/feedback.js?v=20261124-2006"></script>
+  <script src="js/bilingual-verify.js?v=20261124-2006"></script>
+  <script src="js/local-llm.js?v=20261124-2006"></script>
+  <script src="js/prompt-flow.js?v=20261124-2006"></script>
+  <script src="js/app.js?v=20261124-2006"></script>
 </body>
 </html>

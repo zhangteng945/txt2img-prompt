@@ -1341,3 +1341,255 @@ ALL UI CHECKS PASSED
 - 未把 `?v=` 改成未来时间戳；`index.html` 仍保持本轮开始前的 `20261124-1840`。
 - 未 push、未发布 GitHub Pages。
 - 不宣称 99%；真实 API 实测只覆盖上述小型非敏感例子。
+
+## 9. 2026-11-24 19:28 CST 本轮：双向语义校对（独立回译 → 有限修正 → 用户确认）
+
+### 9.1 调查结论
+
+本轮先读现有实现，确认上一轮的实际状态：
+
+- `js/local-llm.js` 只有「初次拆解」和「按当前中文重译」两个模型请求；返回英文直接进六框，没有独立回译。
+- `js/app.js` 只维护每个字段的 `stale`（英文待更新），没有「未核对 / 需确认 / 已校对」这类校对状态。
+- 历史记录保存 `slots` 和 `pendingEnglish`，但没有保存回译、差异或用户确认状态。
+- 上一轮反馈的真实模型输出里出现过：中文要求「不要文字」，正面英文却是 `no text`，负面又有 `text`；同一轮也漏过「晒太阳」，并把「禁止吸烟的告示牌」的语义和全局负面排除混在一起过。本轮真实 API 也复现了 `no text` 留在正面这一类问题。这些是模型输出/分解问题，不是单纯排版问题。
+- 本轮没有把词库内容送进任何模型请求；`js/lexicon.js` 未改。
+
+### 9.2 方案与实现
+
+核心原则：**用户当前中文是权威；回译只读英文、只写回译；英文修正必须有限且再次独立回译。**
+
+状态机（`js/bilingual-verify.js`）：
+
+- `unverified` 未核对：还没有回译，或编辑后已失效。
+- `checking` 核对中：正在请求。
+- `clean` 待确认：回译与当前中文未见明显差异，但用户还没确认。
+- `mismatch` 需确认：发现差异，绝不自动标成已确认。
+- `verified` 已校对：只有用户明确点「确认当前对照」才进入。
+- `error` 核对失败：回译/修正失败，已有编辑保留。
+
+请求拆分（`js/local-llm.js`）：
+
+1. 初次拆解：和上一轮相同，模型输出六个中英字段 + negative。
+2. **独立回译**：请求只包含实际英文（六个 `en` + `negative.en`），不包含 `idea`、`current_fields.zh` 或任何目标中文；系统提示明确「本次不会提供中文原文，不要参考、不要补全」。
+3. 本地结构化比对：`BilingualVerify.compare` 检查漏译、凭空添加、主体/属性错绑、动作-对象、否定落位、数量、身体部位、颜色绑定、人物用词、重复罗列、原文自相矛盾、告示牌语义等。
+4. **有限修正**：只有可修正差异才发修正请求；`fix_keys` 只包含有差异的字段，`fix_negative` 只在确有负面差异时为 true。最多自动修正 `1` 轮。
+5. **再次独立回译**：修正后重新走第 2 步，不复用修正请求里的中文，也不让修正模型自己证明自己。
+6. 最终差异仍存在时保持 `mismatch`；用户可改中文/英文，或明确确认。
+
+时延控制：串行、不并发；回译单次超时 `45000ms`，修正单次 `50000ms`，最多 1 轮。最坏约 140 秒，界面会写明并允许中止。M1 16GB 上不并行请求。
+
+“原文权威”的两层处理：
+
+- 初次拆解后的自动核对会额外比较「整体描述」和六个中文字段：如果模型把「晒太阳」这类原文内容从中文框里漏掉，会报 `input-omitted`，且该问题 `fixable:false`，不自动补中文，避免把模型漏掉的内容藏起来。
+- 用户改中文后的重译只以当前六框中文为权威，不再拿旧的整体描述去覆盖/补写；重译后自动回译核对。用户改英文后原校对失效，可点「回译核对」；手动核对不会自动改用户英文。
+
+界面（`index.html` / `js/app.js` / `styles.css`）：
+
+- 新增「独立回译核对」面板：状态徽标、中文（权威，不回写）、实际英文、独立回译、逐条差异、整体/跨字段差异；负面单独一行。
+- 「确认当前对照」只在 `clean` / `mismatch` 时可点；`mismatch` 确认时保留差异数量并标 `confirmedWithIssues`，不宣称没有差异。
+- 任何中文字段或英文字段输入都会调用 `BilingualVerify.invalidate`；如果正在核对，会中止这次核对并保留编辑。
+- 历史保存 `review`（状态、差异、回译快照、修正轮次、确认时间）和 `reviewStatus`；打开历史时 `BilingualVerify.restore` 校验槽位快照，槽位和快照不一致就退回「未核对」。旧记录没有 `review` 时按「未核对」处理。
+- 不展示 `<think>` 或长推理；回译请求失败的错误详情也会先剥离 think 标签。
+
+### 9.3 上一轮问题如何被暴露（不是只修一句）
+
+- 漏译「晒太阳」：动作锚点检查 + 原文覆盖检查。若原文有、六框中文和回译都没有，报 `input-omitted`；不会自动补写中文或偷偷删掉。
+- 下雨 + 晒太阳：`input-conflict`，保留两侧，`fixable:false`，只提示用户确认；不会替用户删掉一边。
+- 「不要文字，不要水印」却把 `no text` 留在正面：扫所有正面字段的 `no/without + 排除对象`，报 `negation-placement`；同时检查 negative 是否覆盖 `text/watermark`。
+- 「禁止吸烟」告示牌：先识别 sign 语境，`negatedObjects` 跳过“告示牌上的禁止吸烟”，不把它当全局排除；如果 negative 出现 `smoking` 或正面丢了 `sign`，报 `sign-negation` / `sign-meaning`。
+- 一家三口重复罗列：检查 `family of N + 父亲/母亲/孩子` 同框重复、人物框和动作框重复成员，报 `duplicate-subjects`，可有限修正。
+- 动作中文改成「女人」但英文还是 `girl`：逐字段回译检查 + 英文/中文人物检查，报 `identity-conflict`；如果六框中文本身「女孩 / 女人」冲突，报跨字段 `fixable:false`，不替用户决定是不是同一个人。
+
+### 9.4 测试
+
+`tests/local-llm.test.js` 新增/扩展覆盖：
+
+- 独立回译请求不携带权威中文、整体描述、`current_fields`；
+- 回译结构化结果；
+- 漏译 + 原文冲突；
+- 否定落位 + 告示牌区分；
+- 人物用词冲突、重复罗列、身体部位、动作对象；
+- 发现差异后只修正 1 轮，修正后再次独立回译；
+- 修正后仍有差异不进行第二轮；
+- 修正失败/回译超时保留已有英文和中文，报 error，不回退词库；
+- 用户确认后才 `verified`；不一致不自动确认；改中文/英文后失效；历史序列化/恢复；
+- 双向校对成功路径不调用 `Translator` / 词库 / `Parser`；
+- app.js/index.html 静态护栏。
+
+### 9.5 真实本机 API 证据
+
+环境：本机 Ollama，`https://macbook-pro.tail349cac.ts.net:11434`，模型 `qwen3.5:4b`，`think:false`，`temperature:0`。使用现有服务，未启动/停止 Ollama、Lustify、ComfyUI，未启动 SDXL 生图，未改系统配置。脚本 `tests/live-bilingual.js` 串行调用真实 API，耗时 295 秒；完整 JSON 在 `logs/live-bilingual-20261124-200522.json`，可读版在 `logs/live-bilingual-20261124-200522.txt`。以下为实际输出，未改写英文。
+
+#### 例 1：漏译「晒太阳」+ 原文冲突 + 否定落位（一次有限修正）
+
+- 原中文：`窗外下着雨的街道，一只橘猫趴在窗台上晒太阳，不要文字，不要水印`
+- 初译分字段：
+  - pose zh：`一只橘猫趴在窗台上`；en：`an orange cat lying on a windowsill`
+  - scene zh：`窗外下着雨的街道，无文字`；en：`rainy street outside the window, no text`
+  - negative：`文字、水印、低质量` / `text, watermark, low quality`
+- 独立回译：pose `一只橙色的猫趴在窗台上`；scene `窗外雨中的街道，没有文字`
+- 发现的差异：
+  - `input-omitted`：整体描述有「晒太阳」，但六个中文字段和回译都没有保留；`fixable:false`，没有自动补写中文。
+  - `input-conflict`：原文同时有下雨和晒太阳，保留两侧，只提示确认。
+  - `negation-placement`：正面 scene 英文仍是 `no text`，同时负面有 `text`。
+- 自动有限修正：1 轮，调用序列 `backtranslate 11475ms → correct 15376ms → backtranslate 10016ms`。
+- 修正后：scene.en 变为 `rainy street outside the window`；再次回译 `窗外的雨街`；否定落位差异消失。终稿 negative 仍为 `text, watermark, low quality`。
+- 最终状态：`mismatch`（需确认）。剩余差异正是“晒太阳未进入中文框”和“下雨 + 晒太阳”原文冲突，均不自动改中文；没有假装已校对。终稿 pose.en 仍是 `an orange cat lying on a windowsill`。
+
+#### 例 2：告示牌「禁止吸烟」与负面排除的区分（无误报）
+
+- 原中文：`一块写着“禁止吸烟”的告示牌立在便利店门口，画面不要出现文字和水印，一个穿蓝外套的女人站在旁边`
+- 初译分字段：
+  - pose：`站在告示牌旁边` / `standing next to the sign`
+  - scene：`便利店门口，禁止吸烟告示牌` / `convenience store entrance, a sign saying no smoking`
+  - negative：`文字、水印、低质量` / `text, watermark, low quality`
+- 独立回译：pose `站在标牌旁边`；scene `便利店入口，一块写着禁止吸烟的标牌`
+- 发现的差异：无。没有把标牌里的 `no smoking` 当成全局排除而塞进 negative，negative 里没有 `smoking`。
+- 自动修正：无（0 轮，只有 1 次回译，11785ms）。
+- 最终状态：`clean`（待用户确认）。这条说明校对不会一看到 `no` 就误伤告示牌语义；同时也证明它不会为了“找差异”而硬报错。
+
+#### 例 3：一家三口重复罗列 + 一次有限修正
+
+- 原中文：`一家三口站在公园里，父亲牵着孩子，母亲拿着野餐篮，不要文字，不要水印`
+- 初译分字段：
+  - person zh：`一家三口：父亲、母亲和孩子`；en：`a family of three, a father, a mother, and a child`
+  - pose zh：`父亲牵着孩子，母亲拿着野餐篮`；en：`a father holding hands with his child, a mother carrying a picnic basket`
+  - negative：`文字、水印` / `text, watermark`
+- 独立回译：person `一家三口，父亲、母亲和孩子`；pose `父亲牵着孩子的手，母亲抱着野餐篮`
+- 发现的差异：
+  - `duplicate-subjects`：人物框既写 `family of three`，又逐一列出父亲/母亲/孩子；
+  - `duplicate-subjects`：人物框和动作框重复列出同一组成员；
+  - `input-omitted`：原描述有「站」，六框中文和回译都没有保留（`fixable:false`）。
+- 自动有限修正：1 轮，调用 `backtranslate 12395ms → correct 21957ms → backtranslate 10654ms`。
+- 修正后：person.en 变为 `a family of three`（去掉重复成员），pose 仍保留父亲/母亲动作；重复罗列差异消失。终检仍剩 `input-omitted`「站」，没有自动补中文。
+- 最终状态：`mismatch`（需确认）。
+
+#### 例 4：用户把动作中文改成「女人」，人物英文仍是 `girl`（被发现并修正英文，中文冲突保留）
+
+- 初始原中文：`一个女孩坐在窗边看书，白衬衫，柔和窗光`
+- 初译：person `一个女孩` / `a girl`；pose `坐在窗边看书` / `sitting by a window, reading a book`；negative `low quality, blurry, watermark`
+- 用户把 pose 中文改为：`女人转身走向门口`（person 中文仍是「一个女孩」）
+- 真实重译输出：pose.en `girl turning towards the door`
+- 独立回译：person `一个女孩`；pose `女孩转向门`
+- 发现的差异：
+  - 跨字段 `identity-conflict`：六框中文同时有「女孩」和「女人」，如果指同一人需要先统一中文；`fixable:false`。
+  - 中文「女人」没有落到英文 `woman`；pose 英文仍是 `girl`。
+  - pose 回译 `女孩转向门` 与中文「女人转身走向门口」冲突；同时漏了「走」「转身」。
+- 自动有限修正：1 轮，调用 `backtranslate 14505ms → correct 28015ms → backtranslate 14826ms`。
+- 修正后：pose.en 变为 `woman turning and walking towards the door`；再次回译 `女人转身走向门`；逐字段人物冲突消失。
+- 最终状态：`mismatch`（需确认）。剩余的是六框中文自身「女孩 / 女人」不一致；工具没有替用户决定是不是同一个人，也没有自动改中文，因此没有标成已校对。
+
+### 9.6 测试完整输出
+
+`node tests/core.test.js`（36 项全部通过）：
+
+```text
+ok  词典规模落在覆盖率最佳点
+ok  中文短语按语境翻译
+ok  英文反向翻译自然且可对照
+ok  高频中文外貌说法必须命中正确规范词并译出英文
+ok  高频英文外貌词及人物组合必须命中正确类别
+ok  示例想法拆进六个框
+ok  关系句式先拆角色再组装：给…上 / 对着 / 在…上
+ok  关系句按角色分框：动作留姿态，地点进场景，最终英文仍自然
+ok  日常高频动作、物体、动物和氛围都能独立命中
+ok  换词回归：换物体、动物、动作、氛围后关键零件仍然命中
+ok  公共标识固定短语整条命中，不被动作词拆丢
+ok  禁止吸烟与吸烟是两条语义，禁止吸烟不得退成单纯 smoking
+ok  本轮新增规范词都保持唯一并能中英互译回自己
+ok  短别名不切开长词：拒绝抽烟的广告拆成主题动作 + 媒介
+ok  短别名边界：搞笑画面不拆出 smiling，香烟/小猫在边界仍命中
+ok  通用短别名边界规则：所有单字别名都不能从复合词中间命中
+ok  英文短词不能切开带连字符的长词
+ok  补全默认关闭，显式开启后才在缺失维度发生并留下记录
+ok  已有光线镜头时不重复补全
+ok  未收录内容保留原文并提示
+ok  纯英文提示词也能分框
+ok  组装顺序和用户修改生效
+ok  负面提示词覆盖常见问题并能避让冲突
+ok  复杂服装、材质、发型、光效、镜头和场景都能命中
+ok  重复片段不会重复组装
+ok  未收录待补录：过滤纯标点、同词去重、累计次数并保留最近上下文
+ok  待补录导出符合固定 schema，字段齐全且文件名稳定
+ok  补录清单同时含 Markdown 与 JSON，并可预填 GitHub issue
+ok  当前词库已命中的待补录词可标记，备注、删除和本机存储可往返
+ok  结构化场景：长发女孩穿着白色连衣裙是对象-属性-关系，不是扁平标签
+ok  对象-属性-关系：红衣女孩站在蓝色汽车旁，远处有一座白色房子
+ok  否定、并列、转折与作用范围：局部否定不升级成全局 blur
+ok  肢体动作：女人张开五指拆成主体 + 手部动作，不残留中文或 pointing forward
+ok  动作与地点分框，英文从同一结构自然生成
+ok  多候选切分保留歧义，不在长词上直接拍板
+ok  语义守恒检查：否定变肯定、未翻译残留和擅自补光都会阻止完整
+
+36 tests passed.
+```
+
+`node tests/local-llm.test.js`（50 项全部通过）：
+
+```text
+ok  成功：整体描述拆成六字段中英对照、负向提示词，英文直接来自模型
+ok  成功路径不调用 Translator / 词库补英文
+ok  成功路径不调用 Parser / 规则编译器（不静默走规则）
+ok  提示词形态：初次拆解的字段英文和最终正面都是逗号分隔短语，不是叙述句
+ok  句号换逗号不算修复：is/was 等叙述谓语必须被改写
+ok  系统提示与重译提示都明确：逗号分隔提示词，禁止叙述句和套话
+ok  中文修改后重译：新英文仍是提示词短语，保留用户中文和动作关系
+ok  最终拼装：动作短语允许保留语法连接，关系与否定都不丢
+ok  多主体关系：pose 自带主体时不重复输出单独的人物列表
+ok  允许动作短语：woman reading a book by a window 不会被拆成单词标签
+ok  请求体：系统说明 + 用户原文，think:false、非流式，不包含词库
+ok  补全开关：关闭时提示不要补，开启时只允许 light/style
+ok  think 标签与代码围栏残留会被清掉，JSON 仍可解析
+ok  无效 JSON → status:error / invalid-json，不伪造 fallback
+ok  中文有内容但英文缺失 → status:error / missing-english，绝不用词库补
+ok  英文里残留中文 → 判为不可用，不把中文当英文
+ok  模型用「无」表示空字段时不误报缺英文，空字段保持为空
+ok  缺少英文负向提示词 → status:error / empty-negative
+ok  补全默认关闭：模型返回 inferred 时拒绝，避免把推测当原文
+ok  补全开启：light 允许 inferred 并标记；人物补全仍拒绝
+ok  补全开启也只允许 light/style：inferred 里出现 person 直接报错
+ok  超时 → status:error / timeout，挂起 fetch 被中止；不返回规则结果
+ok  网络错误 → status:error / network，并提示模型没开/休眠/Tailscale/跨域
+ok  HTTP 403 → status:error / cors，不返回任何槽位
+ok  中文改动 → 对应英文 stale；重译成功更新英文且保留用户中文
+ok  中文清空 → 英文标 stale；重译返回空英文时清空对应英文，其他字段不动
+ok  重译失败（网络）保留已有中文、英文和 stale 标记，不自动用词库
+ok  重译结果缺 pending 字段 → error / missing-english，整体不落盘
+ok  重译超时 → error / timeout，已有编辑不变
+ok  规则路径只在显式调用时执行：模型失败后手动跑 Parser 仍可用
+ok  设置读写：默认主流程、infer 默认关闭、旧 enabled:false 不再关掉模型
+ok  历史兼容：旧记录 pendingEnglish 会恢复为字段 stale
+ok  中文改动 / 英文手改的 stale 规则可逆，重译只碰传入字段
+ok  独立回译请求只带实际英文，不携带权威中文/整体描述作为抄写目标
+ok  独立回译：实际英文回译成中文，英文为空时允许空回译
+ok  结构化差异：漏译「晒太阳」并保留原文自相矛盾提示，不擅自删一侧
+ok  结构化差异：否定落位与「禁止吸烟」告示牌区分
+ok  结构化差异：人物用词冲突、多人物重复罗列、数量与身体部位
+ok  原文权威：模型中文框漏掉「晒太阳」时，回译核对也要暴露，不悄悄圆过去
+ok  修正只允许在确有负面差异时改 negative，避免把标牌语义越修越错
+ok  双向校对成功路径不调用 Translator / 词库，也不调用规则 Parser
+ok  有限修正：发现差异后只修 1 轮，再独立回译复核；中文始终不动
+ok  有限修正：修正后仍有差异不无限调用，状态保持需确认
+ok  修正请求失败：保留修正前英文和中文，报 error，不回退词库
+ok  回译超时：保留当前英文，报 error，不伪造回译
+ok  校对状态：确认后才已校对，不一致不自动确认，编辑后失效，历史可恢复
+ok  历史记录：校对状态、差异和回译快照可保存/恢复，旧记录按未核对处理
+ok  app.js 接入：主流程自动回译、编辑失效、确认、历史保存校对状态
+ok  修订失败/超时保留编辑的静态护栏：finishReview 不调用 fillFromParsed
+ok  app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）
+50 tests passed.
+```
+
+### 9.7 限制与边界
+
+- **独立回译是辅助核对，不是准确率保证。** 回译和初译来自同一台 `qwen3.5:4b`，可能犯同样的错；结构差异检测也有误报/漏报的可能。因此：
+  - 不一致绝不自动标成已校对；
+  - 用户必须明确点「确认当前对照」才进入已校对；
+  - 不宣称 99%，不写假覆盖率。
+- 最多自动修正 1 轮；修正后仍有差异就保持「需确认」，不会无限调用模型。
+- 原文自身矛盾（如「下雨」+「晒太阳」）只提示，不自动删一侧；原文内容没进入六框中文时只报 `input-omitted`，不自动补写中文。
+- 手动「回译核对」不会自动改用户英文；自动修正只发生在模型初译/重译之后。
+- 校对状态依赖槽位快照：历史打开时若中文或英文与快照不一致，会退回未核对。
+- 本轮未改词库内容；双向校对成功路径不调用 `Translator` / 词库 / `Parser`。
+- 本轮未改 `?v=` 缓存戳（仍为 `20261124-1909`），未 push，未发布 GitHub Pages。
+- 未训练/微调模型，未改 Ollama 模型文件，未启动/停止 Ollama / Lustify / ComfyUI，未启动 SDXL 生图；未改 Tailscale / Ollama 系统配置、CORS、Serve、`keep_alive`，未绑 `0.0.0.0`，未开 Funnel。

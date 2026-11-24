@@ -19,6 +19,7 @@
   const Scene = T2I.Scene;
   const LocalLLM = T2I.LocalLLM;
   const PromptFlow = T2I.PromptFlow;
+  const BilingualVerify = T2I.BilingualVerify;
 
   const STORAGE_KEYS = {
     favorites: 't2i.favorites.v1',
@@ -58,6 +59,8 @@
     lastFocused: null,
     allowCompletion: false,
     verify: null,
+    review: BilingualVerify.emptyReview(),
+    lastRecordId: '',
     // 当前六框的来源：empty / local-model / rules。
     // localSlots 为 true 时，中英同步、组装和缺英文兜底都不查词库。
     source: 'empty',
@@ -98,6 +101,12 @@
     generateBtn: document.getElementById('generateBtn'),
     retranslateBtn: document.getElementById('retranslateBtn'),
     englishSyncNote: document.getElementById('englishSyncNote'),
+    reviewPanel: document.getElementById('reviewPanel'),
+    reviewBadge: document.getElementById('reviewBadge'),
+    reviewSummary: document.getElementById('reviewSummary'),
+    reviewDiffList: document.getElementById('reviewDiffList'),
+    reviewBtn: document.getElementById('reviewBtn'),
+    confirmReviewBtn: document.getElementById('confirmReviewBtn'),
     outputSection: document.getElementById('outputSection'),
     outputMeta: document.getElementById('outputMeta'),
     positiveEn: document.getElementById('positiveEn'),
@@ -264,6 +273,12 @@
     if (state.localSlots) {
       // 本地模型主流程：中文是权威，英文只由用户或「重新生成英文」更新；
       // 任何词库同步都不会发生。
+      if (state.localLLM.running && state.localLLM.op === 'review') {
+        cancelLocalFill('校对期间内容又改了，已中止这次独立回译核对；已有编辑保留。');
+      }
+      if (state.review.status !== BilingualVerify.STATUS.unverified || state.review.checkedAt) {
+        state.review = BilingualVerify.invalidate(state.review);
+      }
       if (lang === 'zh') {
         PromptFlow.markChineseEdited(state.slots, key);
         setHint(
@@ -568,12 +583,155 @@
       el.englishSyncNote.textContent =
         '有 ' + pending.length + ' 个字段的中文已改，英文待更新：' +
         pending.map(slotLabelOf).join('、') + '。重译成功前不会放行生成。';
-    } else if (inferred.length) {
-      el.englishSyncNote.textContent =
-        '英文已与当前中文同步；其中 ' + inferred.map(slotLabelOf).join('、') + ' 为模型补全。';
     } else {
-      el.englishSyncNote.textContent = '英文已与当前中文同步；可点「生成正/负提示词」预览或复制。';
+      const review = BilingualVerify.normalizeReview(state.review);
+      const reviewText = '校对：' + BilingualVerify.statusLabel(review.status) +
+        (review.issues.length ? '（' + review.issues.length + ' 处差异）' : '');
+      if (review.status === 'mismatch') {
+        el.englishSyncNote.textContent =
+          '独立回译发现 ' + review.issues.length + ' 处差异，需你确认或调整；不会自动标成已校对。' + reviewText;
+      } else if (review.status === 'clean') {
+        el.englishSyncNote.textContent = '独立回译与当前中文未见明显差异，待你确认。' + reviewText;
+      } else if (review.status === 'verified') {
+        el.englishSyncNote.textContent = '已校对：你已确认当前中文与英文对照。' +
+          (review.confirmedWithIssues ? ' 仍有 ' + review.issues.length + ' 处差异保留。' : '');
+      } else if (review.status === 'error') {
+        el.englishSyncNote.textContent = '独立回译核对失败：已有中文、英文和编辑都保留，没有改用词库。';
+      } else if (review.status === 'checking') {
+        el.englishSyncNote.textContent = '正在把实际英文独立回译成中文并比对…';
+      } else if (inferred.length) {
+        el.englishSyncNote.textContent =
+          '英文已与当前中文同步；其中 ' + inferred.map(slotLabelOf).join('、') +
+          ' 为模型补全。还没有做独立回译核对。';
+      } else {
+        el.englishSyncNote.textContent = '英文已与当前中文同步；还没有做独立回译核对。';
+      }
     }
+    updateReviewUI();
+  }
+
+  function renderReviewIssue(issue) {
+    return '<li class="review-issue is-' + escapeHtml(issue.severity) + '">' +
+      '<strong>' + escapeHtml(issue.title) + '</strong>' +
+      '<span>' + escapeHtml(issue.detail) + '</span>' +
+      (issue.target || issue.back
+        ? '<span class="review-issue-meta">' +
+          (issue.target ? '中文依据：' + escapeHtml(issue.target) : '') +
+          (issue.target && issue.back ? ' · ' : '') +
+          (issue.back ? '回译/英文：' + escapeHtml(issue.back) : '') +
+          '</span>'
+        : '') +
+      '</li>';
+  }
+
+  function reviewRow(key, label, slot, review) {
+    if (!slot || (!slot.zh && !slot.en)) return '';
+    const result = review.slots && review.slots[key] || {};
+    const backZh = result.backZh || '';
+    const issues = BilingualVerify.slotIssues(review.issues, key);
+    return '<article class="review-row" data-review-row="' + escapeHtml(key) + '">' +
+      '<div class="review-row-head"><strong>' + escapeHtml(label) + '</strong>' +
+        '<span class="review-row-count ' + (issues.length ? 'is-warn' : 'is-ok') + '">' +
+          (issues.length ? '差异 ' + issues.length : (backZh ? '未见明显差异' : '待核对')) +
+        '</span></div>' +
+      '<div class="review-line"><span>中文（权威，不回写）</span><p>' + escapeHtml(slot.zh || '（空）') + '</p></div>' +
+      '<div class="review-line"><span>实际英文</span><code>' + escapeHtml(slot.en || '（空）') + '</code></div>' +
+      '<div class="review-line"><span>独立回译</span><p>' + escapeHtml(backZh || '（还没有回译）') + '</p></div>' +
+      (issues.length ? '<ul class="review-issues">' + issues.map(renderReviewIssue).join('') + '</ul>' : '') +
+      '</article>';
+  }
+
+  function updateReviewUI() {
+    if (!el.reviewPanel) return;
+    if (!state.localSlots) {
+      el.reviewPanel.hidden = true;
+      return;
+    }
+    el.reviewPanel.hidden = false;
+    const review = BilingualVerify.normalizeReview(state.review);
+    const pending = PromptFlow.pendingKeys(state.slots);
+    const status = review.status;
+    if (el.reviewBadge) {
+      el.reviewBadge.textContent = BilingualVerify.statusLabel(status);
+      el.reviewBadge.className = 'review-badge is-' + status;
+    }
+    if (el.reviewSummary) {
+      let summary = BilingualVerify.statusNote(status);
+      if (review.staleReason) summary = review.staleReason + ' ' + summary;
+      if (status === 'mismatch') {
+        summary = '发现 ' + review.issues.length + ' 处差异，没有自动标成已校对；请核对后修改中文或英文，或点「确认当前对照」。';
+      } else if (status === 'verified' && review.confirmedWithIssues) {
+        summary = '你已确认当前对照；其中 ' + review.issues.length + ' 处差异仍保留在下面，方便你回看。';
+      } else if (status === 'error' && review.error) {
+        summary = '本次回译/修正没有完成：' + review.error + ' 已有中文和英文都保留，没有改用词库。';
+      }
+      el.reviewSummary.textContent = summary;
+    }
+
+    const rows = SF.slots.map(function (key) {
+      return reviewRow(key, slotLabelOf(key), state.slots[key], review);
+    }).filter(Boolean);
+    const negative = state.modelNegative || { zh: '', en: '' };
+    if (negative.en || negative.zh) {
+      const negativeResult = review.negative || {};
+      const negativeIssues = BilingualVerify.slotIssues(review.issues, 'negative');
+      rows.push('<article class="review-row review-row-negative" data-review-row="negative">' +
+        '<div class="review-row-head"><strong>负面提示词</strong>' +
+          '<span class="review-row-count ' + (negativeIssues.length ? 'is-warn' : 'is-ok') + '">' +
+            (negativeIssues.length ? '差异 ' + negativeIssues.length : (negativeResult.backZh ? '未见明显差异' : '待核对')) +
+          '</span></div>' +
+        '<div class="review-line"><span>中文对照</span><p>' + escapeHtml(negative.zh || '（无中文对照）') + '</p></div>' +
+        '<div class="review-line"><span>实际英文</span><code>' + escapeHtml(negative.en || '（空）') + '</code></div>' +
+        '<div class="review-line"><span>独立回译</span><p>' + escapeHtml(negativeResult.backZh || '（还没有回译）') + '</p></div>' +
+        (negativeIssues.length ? '<ul class="review-issues">' + negativeIssues.map(renderReviewIssue).join('') + '</ul>' : '') +
+        '</article>');
+    }
+    const globalIssues = review.issues.filter(function (issue) {
+      return issue.slot !== 'negative' && SF.slots.indexOf(issue.slot) === -1;
+    });
+    if (globalIssues.length) {
+      rows.push('<article class="review-row review-row-global" data-review-row="global">' +
+        '<div class="review-row-head"><strong>整体 / 跨字段差异</strong>' +
+          '<span class="review-row-count is-warn">差异 ' + globalIssues.length + '</span></div>' +
+        '<ul class="review-issues">' + globalIssues.map(renderReviewIssue).join('') + '</ul>' +
+        '</article>');
+    }
+    if (el.reviewDiffList) {
+      el.reviewDiffList.innerHTML = rows.length
+        ? rows.join('')
+        : '<p class="review-empty">还没有可核对的英文。先填写中文或用本地模型生成英文。</p>';
+    }
+    if (el.reviewBtn) {
+      el.reviewBtn.disabled = state.localLLM.running || pending.length > 0;
+      el.reviewBtn.textContent = review.checkedAt ? '重新回译核对' : '回译核对';
+    }
+    if (el.confirmReviewBtn) {
+      el.confirmReviewBtn.disabled = state.localLLM.running ||
+        [BilingualVerify.STATUS.clean, BilingualVerify.STATUS.mismatch].indexOf(status) === -1;
+      el.confirmReviewBtn.textContent = status === BilingualVerify.STATUS.verified
+        ? '已校对'
+        : '确认当前对照';
+    }
+  }
+
+  function confirmReview() {
+    if (!state.localSlots) return;
+    const review = BilingualVerify.normalizeReview(state.review);
+    if ([BilingualVerify.STATUS.clean, BilingualVerify.STATUS.mismatch].indexOf(review.status) === -1) {
+      showToast('先完成独立回译核对，再确认');
+      return;
+    }
+    state.review = BilingualVerify.confirm(review, state.slots);
+    updateReviewUI();
+    updateStaleUI();
+    if (state.generated) generate();
+    else syncHistoryReview();
+    showToast(state.review.confirmedWithIssues
+      ? '已确认当前对照；' + review.issues.length + ' 处差异仍保留在面板里'
+      : '已确认当前对照，状态为已校对');
+    setStatus(state.review.confirmedWithIssues
+      ? '已由你确认当前中英对照；仍有 ' + review.issues.length + ' 处差异保留，不做自动删改。'
+      : '已由你确认当前中英对照；再改任一中文或英文，状态会失效。', false);
   }
 
   function hideOutput() {
@@ -694,6 +852,10 @@
       phraseCount: assembled.phraseCount,
       pendingEnglish: pending,
       staleEnglish: pending.length > 0,
+      review: BilingualVerify.serialize(state.review),
+      reviewStatus: state.review.status,
+      reviewIssueCount: state.review.issues.length,
+      reviewConfirmed: state.review.status === BilingualVerify.STATUS.verified,
       savedAt: Date.now()
     };
   }
@@ -966,7 +1128,21 @@
     }
     state.history.unshift(snapshot);
     state.history = state.history.slice(0, 30);
+    state.lastRecordId = snapshot.id;
     persistLibrary();
+  }
+
+  function syncHistoryReview() {
+    if (!state.lastRecordId || !state.generated) return false;
+    const index = state.history.findIndex(function (item) { return item.id === state.lastRecordId; });
+    if (index === -1) return false;
+    const snapshot = snapshotCurrent();
+    if (!snapshot) return false;
+    snapshot.id = state.lastRecordId;
+    state.history[index] = snapshot;
+    persistLibrary();
+    if (el.libraryModal && !el.libraryModal.hidden) renderLibrary();
+    return true;
   }
 
   function loadRecord(record) {
@@ -1001,6 +1177,8 @@
     if (el.allowCompletion) el.allowCompletion.checked = state.allowCompletion;
     state.unknownBySlot = Object.create(null);
     state.editRevision = 0;
+    state.review = state.localSlots ? BilingualVerify.restore(record.review, state.slots) : BilingualVerify.emptyReview();
+    state.lastRecordId = record.id || '';
     renderScene(null);
     el.idea.value = record.idea || '';
     updateIdeaCount();
@@ -1017,6 +1195,26 @@
     closeAllModals();
 
     if (state.localSlots) {
+      const review = BilingualVerify.normalizeReview(state.review);
+      if (review.status === BilingualVerify.STATUS.mismatch) {
+        setLocalStatus(
+          'secondary',
+          '历史记录已打开，校对为「需确认」',
+          '保存时有 ' + review.issues.length + ' 处差异未确认；中文和英文原样恢复，没有自动改。'
+        );
+      } else if (review.status === BilingualVerify.STATUS.verified) {
+        setLocalStatus(
+          'secondary',
+          '历史记录已打开，校对为「已校对」',
+          '保存时已由你确认当前对照；再改中文或英文会失效。'
+        );
+      } else if (review.status === BilingualVerify.STATUS.clean) {
+        setLocalStatus(
+          'secondary',
+          '历史记录已打开，校对为「待确认」',
+          '保存时独立回译未见明显差异，但还没有确认。'
+        );
+      }
       const pending = PromptFlow.pendingKeys(state.slots);
       if (pending.length) {
         setStatus(
@@ -1069,6 +1267,9 @@
         const recordSlots = PromptFlow.normalizeSlots(record.slots, record.pendingEnglish);
         const pendingCount = PromptFlow.pendingKeys(recordSlots).length;
         const sourceLabel = record.source === 'local-model' ? '本地模型' : '规则次要路径';
+        const reviewStatus = record.reviewStatus || (record.review && record.review.status) || BilingualVerify.STATUS.unverified;
+        const reviewCount = Number(record.reviewIssueCount || 0);
+        const reviewLabel = BilingualVerify.statusLabel(reviewStatus);
         return (
           '<article class="record-card">' +
             '<div class="record-main">' +
@@ -1076,6 +1277,7 @@
               '<p class="record-meta">' + escapeHtml(formatSavedAt(record.savedAt)) +
                 (record.phraseCount ? ' · ' + record.phraseCount + ' 个短语' : '') +
                 ' · ' + escapeHtml(sourceLabel) +
+                (record.source === 'local-model' ? ' · <span class="record-review is-' + escapeHtml(reviewStatus) + '">校对：' + escapeHtml(reviewLabel) + (reviewCount ? ' ' + reviewCount + ' 项差异' : '') + '</span>' : '') +
                 (pendingCount ? ' · <strong class="record-stale">英文待更新 ' + pendingCount + ' 项</strong>' : '') + '</p>' +
               '<p class="record-preview">' + escapeHtml(preview || '（没有想法文本）') + '</p>' +
             '</div>' +
@@ -1422,17 +1624,26 @@
   function setRequestButtonsDisabled(disabled) {
     if (el.fillBtn) el.fillBtn.disabled = disabled;
     if (el.ruleFillBtn) el.ruleFillBtn.disabled = disabled;
+    if (el.generateBtn) el.generateBtn.disabled = disabled;
     if (el.retranslateBtn) el.retranslateBtn.disabled = disabled ||
       !state.localSlots || !PromptFlow.pendingKeys(state.slots).length;
+    if (el.reviewBtn) el.reviewBtn.disabled = disabled ||
+      !state.localSlots || PromptFlow.pendingKeys(state.slots).length > 0;
+    if (el.confirmReviewBtn) el.confirmReviewBtn.disabled = disabled ||
+      [BilingualVerify.STATUS.clean, BilingualVerify.STATUS.mismatch].indexOf(state.review.status) === -1;
   }
 
   function cancelLocalFill(message) {
+    const wasReview = state.localLLM.op === 'review';
     state.localLLM.runId += 1;
     const controller = state.localLLM.controller;
     state.localLLM.controller = null;
     state.localLLM.running = false;
     state.localLLM.op = '';
     state.localLLM.abortRequested = false;
+    if (wasReview && state.review.status === BilingualVerify.STATUS.checking) {
+      state.review = BilingualVerify.invalidate(state.review);
+    }
     setRequestButtonsDisabled(false);
     updateStaleUI();
     if (controller) {
@@ -1472,7 +1683,7 @@
       detail += '请在「连接设置」里填写完整的 http(s):// 地址。';
     }
     if (result && result.detail &&
-        ['invalid-json', 'invalid-spec', 'missing-english', 'narrative-english', 'inferred', 'empty-negative', 'server', 'empty-fields'].indexOf(code) !== -1) {
+        ['invalid-json', 'invalid-spec', 'missing-english', 'narrative-english', 'inferred', 'empty-negative', 'empty-backtranslation', 'empty-english', 'correction-failed', 'server', 'empty-fields'].indexOf(code) !== -1) {
       detail += ' 细节：' + result.detail + '。';
     }
     return detail;
@@ -1606,17 +1817,19 @@
     state.source = 'local-model';
     state.model = result.model || state.model;
     state.verify = null;
+    state.review = BilingualVerify.emptyReview();
     writeAllSlotsToDom();
     updateStaleUI();
     hideOutput();
-    setLocalStatus(
-      'ok',
-      '英文重译完成',
-      '用时 ' + localSecondsText(result.elapsedMs) + '，模型 ' + (result.model || state.model) + '。只更新了 ' +
-      applied.updated.map(slotLabelOf).join('、') + ' 的英文；中文保持你改过的版本，没有回写。'
-    );
-    setStatus('英文已按当前中文重译；中文未被改回。已刷新正/负提示词。', false);
-    generate();
+    setStatus('英文已按当前中文重译；正在把实际英文独立回译，核对后再生成最终提示词。', false);
+    const started = startReview({
+      correct: true,
+      keys: applied.updated.slice(),
+      auto: true,
+      compareIdea: false,
+      after: generate
+    });
+    if (!started) generate();
   }
 
   function startRetranslate() {
@@ -1670,6 +1883,204 @@
     });
   }
 
+
+  function applyReviewCorrection(result) {
+    const review = result && result.review || {};
+    const keys = Array.isArray(review.correctedKeys) ? review.correctedKeys.slice() : [];
+    let changed = false;
+    if (keys.length) {
+      const applied = PromptFlow.applyEnglish(state.slots, result.fields, keys);
+      if (applied.ok) changed = true;
+    }
+    if (result && result.negative && result.negative.en &&
+        (!state.modelNegative || result.negative.en !== state.modelNegative.en ||
+         result.negative.zh !== state.modelNegative.zh)) {
+      state.modelNegative = {
+        en: result.negative.en,
+        zh: result.negative.zh || (state.modelNegative && state.modelNegative.zh) || ''
+      };
+      changed = true;
+    }
+    return changed;
+  }
+
+  function startReview(options) {
+    const opts = options || {};
+    if (!state.localSlots || state.localLLM.running) return false;
+    const pending = PromptFlow.pendingKeys(state.slots);
+    if (pending.length) {
+      setStatus(
+        '先重新生成英文：' + pending.map(slotLabelOf).join('、') +
+        ' 的中文已改，英文仍待更新，不能拿旧英文做回译核对。',
+        true
+      );
+      updateReviewUI();
+      return false;
+    }
+    const runId = state.localLLM.runId + 1;
+    state.localLLM.runId = runId;
+    const revision = state.editRevision;
+    let controller = null;
+    try {
+      controller = new AbortController();
+    } catch (err) {
+      controller = null;
+    }
+    state.localLLM.running = true;
+    state.localLLM.op = 'review';
+    state.localLLM.abortRequested = false;
+    state.localLLM.controller = controller;
+    state.review = BilingualVerify.normalizeReview({
+      status: BilingualVerify.STATUS.checking,
+      snapshot: BilingualVerify.snapshotOf(state.slots),
+      checkedAt: 0,
+      issues: [],
+      slots: {},
+      negative: {}
+    });
+    setRequestButtonsDisabled(true);
+    updateStaleUI();
+    const model = LocalLLM.normalizeModel(state.localLLM.settings.model);
+    setLocalStatus(
+      'running',
+      opts.auto ? '初稿已填，正在独立回译核对' : '正在独立回译核对',
+      '只把实际英文回译成中文，再与你的当前中文比对；最多自动修正 1 轮并再次回译。模型 ' + model +
+      '，最长约 ' + Math.round((LocalLLM.BACKTRANSLATE_TIMEOUT_MS + LocalLLM.CORRECTION_TIMEOUT_MS + LocalLLM.BACKTRANSLATE_TIMEOUT_MS) / 1000) +
+      ' 秒，可点「中止」。'
+    );
+
+    LocalLLM.review(state.localLLM.settings, {
+      fields: currentFieldPayload(),
+      negative: state.modelNegative,
+      keys: opts.keys,
+      correct: opts.correct !== false,
+      auto: opts.auto === true,
+      compareIdea: opts.compareIdea === true,
+      idea: opts.compareIdea === true ? el.idea.value : '',
+      maxCorrections: LocalLLM.MAX_CORRECTIONS
+    }, {
+      signal: controller ? controller.signal : undefined,
+      timeoutMs: LocalLLM.BACKTRANSLATE_TIMEOUT_MS,
+      correctionTimeoutMs: LocalLLM.CORRECTION_TIMEOUT_MS
+    }).then(function (result) {
+      finishReview(runId, revision, opts, result);
+    }).catch(function (err) {
+      finishReview(runId, revision, opts, {
+        status: 'error',
+        code: 'unexpected',
+        reason: String(err && err.message ? err.message : err),
+        detail: String(err && err.message ? err.message : err),
+        review: {
+          status: 'error',
+          error: String(err && err.message ? err.message : err),
+          issues: [],
+          slots: {},
+          calls: []
+        }
+      });
+    });
+    return true;
+  }
+
+  function finishReview(runId, revision, options, result) {
+    if (runId !== state.localLLM.runId || !state.localLLM.running) return;
+    const opts = options || {};
+    state.localLLM.running = false;
+    state.localLLM.op = '';
+    state.localLLM.controller = null;
+    state.localLLM.abortRequested = false;
+    setRequestButtonsDisabled(false);
+
+    if (revision !== state.editRevision) {
+      state.review = BilingualVerify.invalidate(state.review);
+      updateStaleUI();
+      setLocalStatus(
+        'error',
+        '核对期间内容又改了，回译结果未采用',
+        '你的最新中文和英文都保留着；校对状态已失效，请重新点「回译核对」。'
+      );
+      setStatus('回译核对结果已丢弃：请求期间内容又改了。最新编辑已保留。', true);
+      return;
+    }
+
+    if (!result || result.status !== 'ok') {
+      const changed = applyReviewCorrection(result);
+      const review = result && result.review
+        ? BilingualVerify.normalizeReview(result.review)
+        : BilingualVerify.normalizeReview({ status: 'error', error: (result && result.reason) || '回译核对失败' });
+      state.review = review;
+      writeAllSlotsToDom();
+      updateStaleUI();
+      updateWarningFromState();
+      if (changed) hideOutput();
+      const detail = localErrorDetail(result || { code: 'unexpected' });
+      setLocalStatus(
+        'error',
+        '独立回译核对失败，已有编辑已保留',
+        detail + ' 中文和英文都保留，没有自动改用规则或词库。'
+      );
+      setStatus(
+        '独立回译核对失败：' + LocalLLM.reasonText((result && result.code) || 'unexpected') +
+        '。已有中文、英文和编辑都保留；没有静默回退词库。',
+        true
+      );
+      if (opts.after) {
+        opts.after();
+        setStatus('已生成提示词，但独立回译核对失败；结果标为「核对失败」，没有假装已验证。', true);
+      }
+      return;
+    }
+
+    const review = BilingualVerify.normalizeReview(result.review);
+    const changed = applyReviewCorrection(result);
+    state.review = review;
+    state.localSlots = true;
+    state.source = 'local-model';
+    state.model = result.model || state.model;
+    state.verify = null;
+    writeAllSlotsToDom();
+    updateStaleUI();
+    updateWarningFromState();
+    if (changed) hideOutput();
+
+    if (review.status === BilingualVerify.STATUS.mismatch) {
+      setLocalStatus(
+        'error',
+        '独立回译发现差异，需你确认',
+        '共 ' + review.issues.length + ' 处差异（已自动修正 ' + review.correctedKeys.length +
+        ' 个字段' + (review.corrected ? '，并再次回译复核' : '') +
+        '）。没有自动标成已校对；请调整中文或英文，或明确点「确认当前对照」。'
+      );
+      setStatus(
+        '独立回译发现 ' + review.issues.length + ' 处差异，校对状态为「需确认」；' +
+        '没有自动标成已校对，也没有用词库改英文。',
+        true
+      );
+    } else if (review.status === BilingualVerify.STATUS.clean) {
+      setLocalStatus(
+        'ok',
+        '独立回译完成，待你确认',
+        '未见明显差异' + (review.corrected ? '；已自动修正 ' + review.correctedKeys.length + ' 个字段并再次回译复核' : '') +
+        '。回译是辅助，不是准确率保证；请点「确认当前对照」后才算已校对。'
+      );
+      setStatus('独立回译与当前中文未见明显差异，状态为「待确认」；请核对后确认。', false);
+    } else {
+      setLocalStatus(
+        'secondary',
+        '独立回译状态：' + BilingualVerify.statusLabel(review.status),
+        review.error || BilingualVerify.statusNote(review.status)
+      );
+    }
+
+    if (opts.after) {
+      opts.after();
+    } else if (state.generated) {
+      generate();
+    } else {
+      syncHistoryReview();
+    }
+  }
+
   function fillFromModel(result) {
     const fields = result.fields || {};
     state.slots = SF.emptySlots();
@@ -1689,6 +2100,7 @@
     state.source = 'local-model';
     state.parsed = null;
     state.verify = null;
+    state.review = BilingualVerify.emptyReview();
     state.modelNegative = result.negative || null;
     state.model = result.model || LocalLLM.normalizeModel(state.localLLM.settings.model);
     state.unknownBySlot = Object.create(null);
@@ -1713,8 +2125,8 @@
     );
     setStatus(
       '本地模型已把整体描述拆成六个中英对照框，直接给出了英文。' +
-      '填了 ' + filled + ' 个字段；中文可逐项修改，改后对应英文会标「待更新」。' +
-      '确认中文后点「重新生成英文」，会以当前中文为准重译。' + inferredText,
+      '填了 ' + filled + ' 个字段；中文是权威，改后对应英文会标「待更新」。' +
+      '现在会先把实际英文独立回译成中文核对差异，再让你确认。' + inferredText,
       false
     );
 
@@ -1732,6 +2144,10 @@
         setHint(key, '由本地模型拆出并翻译；改中文会标记英文待更新，改英文不会被词库覆盖。', false);
       }
     });
+
+    setTimeout(function () {
+      startReview({ correct: true, auto: true, compareIdea: true });
+    }, 0);
 
     setTimeout(function () {
       const target = document.getElementById('workflow-title');
@@ -1883,6 +2299,8 @@
     state.parsed = null;
     state.generated = null;
     state.verify = null;
+    state.review = BilingualVerify.emptyReview();
+    state.lastRecordId = '';
     state.unknownBySlot = Object.create(null);
     renderScene(null);
     el.idea.value = '';
@@ -1919,6 +2337,7 @@
     fields.en.value = '';
     state.unknownBySlot[key] = [];
     state.editRevision += 1;
+    state.review = BilingualVerify.invalidate(state.review);
     hideOutput();
     updateWarningFromState();
     setHint(key, '本框已清空。', false);
@@ -1951,6 +2370,10 @@
   }
 
   function generate() {
+    if (state.localLLM.running) {
+      setStatus('本地模型请求还在进行中，等这次拆解/回译/修正结束后再生成，避免复制半套结果。', true);
+      return;
+    }
     SF.slots.forEach(function (key) {
       const fields = slotTextareas(key);
       state.slots[key].zh = fields.zh.value;
@@ -2021,10 +2444,13 @@
       ? (negative.negativeEn ? negative.negativeEn.split(',').filter(function (item) { return item.trim(); }).length : 0)
       : negative.items.length;
     const extraCount = state.localSlots ? 0 : negative.extraItems.length;
+    const review = BilingualVerify.normalizeReview(state.review);
     if (state.localSlots) {
       const inferred = PromptFlow.inferredKeys(state.slots);
       el.outputMeta.textContent =
         assembled.phraseCount + ' 个正面短语 · ' + negCount + ' 个负面词 · 英文来自本地模型 · 未使用词库' +
+        ' · 校对：' + BilingualVerify.statusLabel(review.status) +
+        (review.issues.length ? ' ' + review.issues.length + ' 项差异' : '') +
         (inferred.length ? ' · 补全 ' + inferred.length + ' 个' : '');
     } else {
       el.outputMeta.textContent =
@@ -2036,10 +2462,25 @@
 
     if (state.localSlots) {
       const inferred = PromptFlow.inferredKeys(state.slots);
-      el.outputFootnote.textContent = inferred.length
+      let reviewNote = '';
+      if (review.status === BilingualVerify.STATUS.mismatch) {
+        reviewNote = ' 独立回译发现 ' + review.issues.length + ' 处差异，尚未确认；请先看上方校对面板。';
+      } else if (review.status === BilingualVerify.STATUS.verified) {
+        reviewNote = review.confirmedWithIssues
+          ? ' 校对已由你确认；仍有 ' + review.issues.length + ' 处差异保留。'
+          : ' 校对已由你确认。';
+      } else if (review.status === BilingualVerify.STATUS.clean) {
+        reviewNote = ' 独立回译未见明显差异，但还没有确认。';
+      } else if (review.status === BilingualVerify.STATUS.error) {
+        reviewNote = ' 独立回译核对失败；结果未验证，已有英文保留。';
+      } else {
+        reviewNote = ' 还没有做独立回译核对。';
+      }
+      el.outputFootnote.textContent = (inferred.length
         ? '英文由本地模型按描述直接给出，未使用词库；其中 ' + inferred.map(slotLabelOf).join('、') +
-          ' 是开启「允许推测」后的补全。再次修改中文会隐藏本结果并标记英文待更新。'
-        : '英文由本地模型按描述直接给出，未使用词库或规则补全。再次修改中文会隐藏本结果并标记英文待更新。';
+          ' 是开启「允许推测」后的补全。'
+        : '英文由本地模型按描述直接给出，未使用词库或规则补全。') + reviewNote +
+        ' 再次修改中文会隐藏本结果并标记英文待更新。';
     } else if (assembled.quality.length) {
       el.outputFootnote.textContent = '末尾质量词为勾选规则补全后加入：' +
         assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。';
@@ -2069,7 +2510,15 @@
     } else if (onlyNegative && !assembled.positiveEn.trim()) {
       setStatus('已生成负面约束；正面为空，可继续补充想画的主体与场景。', false);
     } else if (state.localSlots) {
-      setStatus('已生成正/负提示词，英文来自本地模型与你的编辑，未使用词库。复制英文即可粘贴到 SDXL / ComfyUI。', false);
+      if (review.status === BilingualVerify.STATUS.mismatch) {
+        setStatus('已生成正/负提示词，但独立回译有 ' + review.issues.length +
+          ' 处差异未确认；校对为「需确认」，没有自动标成已校对。', true);
+      } else if (review.status === BilingualVerify.STATUS.verified) {
+        setStatus('已生成正/负提示词；校对已由你确认。复制英文即可粘贴到 SDXL / ComfyUI。', false);
+      } else {
+        setStatus('已生成正/负提示词，英文来自本地模型与你的编辑，未使用词库；校对状态：' +
+          BilingualVerify.statusLabel(review.status) + '。', review.status === BilingualVerify.STATUS.error);
+      }
     } else {
       setStatus('已生成正/负提示词（规则次要路径）。复制英文即可粘贴到 SDXL / ComfyUI。', false);
     }
@@ -2187,6 +2636,11 @@
     el.fillBtn.addEventListener('click', runFill);
     if (el.ruleFillBtn) el.ruleFillBtn.addEventListener('click', runRuleFill);
     if (el.retranslateBtn) el.retranslateBtn.addEventListener('click', startRetranslate);
+    if (el.reviewBtn) el.reviewBtn.addEventListener('click', function () {
+      // 用户手动核对时不自动改英文；自动修正只发生在模型初译/重译之后。
+      startReview({ correct: false, auto: false });
+    });
+    if (el.confirmReviewBtn) el.confirmReviewBtn.addEventListener('click', confirmReview);
     el.resetBtn.addEventListener('click', clearAll);
     el.generateBtn.addEventListener('click', generate);
     el.idea.addEventListener('input', function () {

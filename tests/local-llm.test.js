@@ -18,7 +18,7 @@ const assert = require('assert');
 
 global.window = global;
 
-['utils', 'lexicon', 'translator', 'scene', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback', 'local-llm', 'prompt-flow']
+['utils', 'lexicon', 'translator', 'scene', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback', 'bilingual-verify', 'local-llm', 'prompt-flow']
   .forEach(function (name) {
     require(path.join(__dirname, '..', 'js', name + '.js'));
   });
@@ -32,6 +32,7 @@ const Assemble = T.Assemble;
 const Negative = T.Negative;
 const Scene = T.Scene;
 const TR = T.Translator;
+const BV = T.BilingualVerify;
 
 let passed = 0;
 const tests = [];
@@ -793,6 +794,547 @@ test('中文改动 / 英文手改的 stale 规则可逆，重译只碰传入字�
   assert.strictEqual(slots.person.stale, false);
   assert.strictEqual(slots.outfit.en, 'wearing a cream trench coat');
   assert.strictEqual(slots.outfit.stale, true);
+});
+
+
+test('独立回译请求只带实际英文，不携带权威中文/整体描述作为抄写目标', function () {
+  const request = LocalLLM.buildBacktranslateRequest(settings(), {
+    fields: {
+      person: { zh: '一只橘猫', en: 'an orange cat' },
+      pose: { zh: '一只橘猫趴在窗台上晒太阳', en: 'an orange cat lying on the windowsill' }
+    },
+    negative: { zh: '不要文字，不要水印', en: 'no text, no watermark' }
+  });
+  const user = request.body.messages[1].content;
+  const system = request.body.messages[0].content;
+  assert.ok(/an orange cat lying on the windowsill/.test(user));
+  assert.ok(/no text, no watermark/.test(user));
+  ['一只橘猫', '晒太阳', '不要文字', '不要水印', 'current_fields', 'original_idea'].forEach(function (forbidden) {
+    assert.strictEqual(user.indexOf(forbidden), -1, '回译请求不应携带目标中文：' + forbidden);
+  });
+  assert.ok(/独立/.test(system));
+  assert.ok(/不要参考任何中文原文/.test(system));
+  assert.ok(/不补全|不要补全/.test(system));
+  assert.strictEqual(request.body.think, false);
+  assert.strictEqual(request.body.format, 'json');
+});
+
+test('独立回译：实际英文回译成中文，英文为空时允许空回译', function () {
+  return LocalLLM.backtranslate(settings(), {
+    fields: {
+      person: { zh: '一只橘猫', en: 'an orange cat' },
+      pose: { zh: '趴在窗台上', en: 'lying on the windowsill' }
+    },
+    negative: { zh: '不要文字', en: 'no text' }
+  }, {
+    fetchImpl: okFetch({
+      fields: {
+        person: { back_zh: '一只橘猫' },
+        outfit: { back_zh: '' },
+        pose: { back_zh: '趴在窗台上' },
+        scene: { back_zh: '' },
+        light: { back_zh: '' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '没有文字' }
+    })
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(result.fields.person.back_zh, '一只橘猫');
+    assert.strictEqual(result.fields.pose.back_zh, '趴在窗台上');
+    assert.strictEqual(result.negative.back_zh, '没有文字');
+  });
+});
+
+test('结构化差异：漏译「晒太阳」并保留原文自相矛盾提示，不擅自删一侧', function () {
+  const fields = {
+    person: { zh: '', en: '' },
+    outfit: { zh: '', en: '' },
+    pose: { zh: '一只橘猫趴在窗台上晒太阳', en: 'an orange cat lying on the windowsill' },
+    scene: { zh: '窗外下着雨的街道', en: 'a rainy street outside the window' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  };
+  const result = BV.compare({
+    fields: fields,
+    back: {
+      pose: { back_zh: '一只橘猫趴在窗台上' },
+      scene: { back_zh: '窗外下雨的街道' }
+    },
+    negative: { zh: '', en: 'low quality' },
+    backNegative: { back_zh: '低质量' }
+  });
+  assert.strictEqual(result.status, 'mismatch');
+  assert.ok(result.issues.some(function (issue) {
+    return issue.type === 'missing-content' && issue.slot === 'pose' && /晒太阳/.test(issue.title + issue.detail);
+  }), '应发现晒太阳漏译');
+  const conflict = result.issues.find(function (issue) { return issue.type === 'input-conflict'; });
+  assert.ok(conflict, '下雨 + 晒太阳应提示原文冲突');
+  assert.strictEqual(conflict.fixable, false);
+  assert.strictEqual(result.slots.pose.zh, '一只橘猫趴在窗台上晒太阳', '中文不得被回译覆盖');
+});
+
+test('结构化差异：否定落位与「禁止吸烟」告示牌区分', function () {
+  const fields = {
+    person: { zh: '', en: '' },
+    outfit: { zh: '', en: '' },
+    pose: { zh: '', en: '' },
+    scene: {
+      zh: '画面里的告示牌写着禁止吸烟，不要文字，不要水印',
+      en: 'a no smoking sign, no text, no watermark'
+    },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  };
+  const result = BV.compare({
+    fields: fields,
+    back: {
+      scene: { back_zh: '一块写着禁止吸烟的告示牌，没有文字，没有水印' }
+    },
+    negative: { zh: '文字、水印、吸烟', en: 'text, watermark, smoking' },
+    backNegative: { back_zh: '文字、水印、吸烟' }
+  });
+  assert.strictEqual(result.status, 'mismatch');
+  assert.ok(result.issues.some(function (issue) {
+    return issue.type === 'negation-placement' && issue.target === '文字';
+  }), '正面 no text 应被标出');
+  assert.ok(result.issues.some(function (issue) {
+    return issue.type === 'negation-placement' && issue.target === '水印';
+  }), '正面 no watermark 应被标出');
+  assert.ok(result.issues.some(function (issue) {
+    return issue.type === 'sign-negation';
+  }), '标牌语义被扔进负面应被标出');
+});
+
+test('结构化差异：人物用词冲突、多人物重复罗列、数量与身体部位', function () {
+  const fields = {
+    person: { zh: '一个女孩，她有一头长发', en: 'a family of three, the father, the mother, the child' },
+    outfit: { zh: '', en: '' },
+    pose: { zh: '女人转身走向门口，手里拿着一束花', en: 'a girl turning toward the door' },
+    scene: { zh: '公园里，一家三口', en: 'a family of three in the park' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  };
+  const result = BV.compare({
+    fields: fields,
+    back: {
+      person: { back_zh: '一家三口，父亲、母亲和孩子，父亲、母亲和孩子' },
+      pose: { back_zh: '一个女孩转身走向门口' },
+      scene: { back_zh: '公园里的一家三口' }
+    },
+    negative: { zh: '', en: 'low quality' },
+    backNegative: { back_zh: '低质量' }
+  });
+  assert.ok(result.issues.some(function (issue) { return issue.type === 'identity-conflict'; }), '女孩/女人冲突应被发现');
+  assert.ok(result.issues.some(function (issue) { return issue.type === 'duplicate-subjects'; }), '重复罗列应被发现');
+  assert.ok(result.issues.some(function (issue) { return issue.type === 'body-part' && /头发/.test(issue.title); }), '头发漏译应被发现');
+  assert.ok(result.issues.some(function (issue) { return issue.type === 'action-object' && /花/.test(issue.title); }), '花漏译应被发现');
+});
+
+
+test('原文权威：模型中文框漏掉「晒太阳」时，回译核对也要暴露，不悄悄圆过去', function () {
+  const fields = {
+    person: { zh: '', en: '' },
+    outfit: { zh: '', en: '' },
+    pose: { zh: '一只橘猫趴在窗台上', en: 'an orange cat lying on the windowsill' },
+    scene: { zh: '窗外下着雨的街道', en: 'a rainy street outside the window' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  };
+  const result = BV.compare({
+    fields: fields,
+    back: {
+      pose: { back_zh: '一只橙色的猫趴在窗台上' },
+      scene: { back_zh: '窗外的雨街' }
+    },
+    negative: { zh: '低质量', en: 'low quality' },
+    backNegative: { back_zh: '低质量' },
+    idea: '窗外下着雨的街道，一只橘猫趴在窗台上晒太阳',
+    compareIdea: true
+  });
+  assert.ok(result.issues.some(function (issue) {
+    return issue.type === 'input-omitted' && /晒太阳/.test(issue.title);
+  }), '模型把晒太阳从中文框漏掉时，也必须暴露');
+  assert.ok(result.issues.some(function (issue) { return issue.type === 'input-conflict'; }));
+  assert.strictEqual(result.slots.pose.zh, '一只橘猫趴在窗台上', '不自动补写中文');
+});
+
+test('修正只允许在确有负面差异时改 negative，避免把标牌语义越修越错', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '女人转身走向门口';
+  slots.pose.en = 'girl turning towards the door';
+  const negative = { zh: '文字、水印', en: 'text, watermark' };
+  let correctionCalls = 0;
+  const fetchImpl = function (url, init) {
+    const system = JSON.parse(init.body).messages[0].content;
+    if (/修正器/.test(system)) {
+      correctionCalls += 1;
+      return Promise.resolve(responseWith(JSON.stringify({
+        fields: {
+          person: { en: 'a woman with a short bob, seen in profile looking into the distance' },
+          outfit: { en: 'wearing a cream trench coat' },
+          pose: { en: 'woman turning and walking towards the door' },
+          scene: { en: 'beneath a cherry tree' },
+          light: { en: 'soft natural light' },
+          style: { en: '' }
+        },
+        // 故意多返回 negative：没有负面差异时页面不得采用。
+        negative: { zh: '文字、水印、吸烟', en: 'text, watermark, smoking' },
+        notes: []
+      })));
+    }
+    return Promise.resolve(responseWith(JSON.stringify({
+      fields: {
+        person: { back_zh: '一个短发女人，侧脸看向远处' },
+        outfit: { back_zh: '穿着米色风衣' },
+        pose: { back_zh: '女孩转身走向门口' },
+        scene: { back_zh: '樱花树下' },
+        light: { back_zh: '柔和的自然光' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '文字、水印' },
+      notes: []
+    })));
+  };
+  return LocalLLM.review(settings(), {
+    fields: slots,
+    negative: negative
+  }, { fetchImpl: fetchImpl }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(correctionCalls, 1);
+    assert.strictEqual(result.negative.en, 'text, watermark', '没有负面差异时不得采用模型多返回的 smoking');
+  });
+});
+
+
+test('双向校对成功路径不调用 Translator / 词库，也不调用规则 Parser', function () {
+  const originals = {
+    translateZh: TR.translateZh,
+    translateEn: TR.translateEn,
+    translateZhPhrase: TR.translateZhPhrase
+  };
+  const calls = [];
+  ['translateZh', 'translateEn', 'translateZhPhrase'].forEach(function (name) {
+    TR[name] = function () {
+      calls.push(name);
+      throw new Error('双向校对不应调用词库');
+    };
+  });
+  const fields = fieldState(successPayload());
+  return LocalLLM.review(settings(), {
+    fields: fields,
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' }
+  }, {
+    fetchImpl: okFetch({
+      fields: {
+        person: { back_zh: '一个短发女人，侧脸看向远处' },
+        outfit: { back_zh: '穿着米色风衣' },
+        pose: { back_zh: '站在樱花树下' },
+        scene: { back_zh: '樱花树下' },
+        light: { back_zh: '柔和的自然光' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '低质量、模糊、水印' }
+    })
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(result.review.status, 'clean');
+  }).finally(function () {
+    Object.keys(originals).forEach(function (name) { TR[name] = originals[name]; });
+  });
+});
+
+test('有限修正：发现差异后只修 1 轮，再独立回译复核；中文始终不动', function () {
+  const slots = fieldState(successPayload());
+  slots.person.zh = '短发女人';
+  slots.person.en = 'a woman with a short bob';
+  slots.pose.zh = '一只橘猫趴在窗台上晒太阳';
+  slots.pose.en = 'an orange cat lying on the windowsill';
+  let backCount = 0;
+  let correctionCalls = 0;
+  const sent = [];
+  const fetchImpl = function (url, init) {
+    const body = JSON.parse(init.body);
+    sent.push(body);
+    const system = body.messages[0].content;
+    if (/修正器/.test(system)) {
+      correctionCalls += 1;
+      return Promise.resolve(responseWith(JSON.stringify({
+        fields: {
+          person: { en: 'a woman with a short bob' },
+          outfit: { en: 'wearing a cream trench coat' },
+          pose: { en: 'an orange cat lying on the windowsill in the sun' },
+          scene: { en: 'beneath a cherry tree' },
+          light: { en: 'soft natural light' },
+          style: { en: '' }
+        },
+        negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' },
+        notes: []
+      })));
+    }
+    backCount += 1;
+    return Promise.resolve(responseWith(JSON.stringify({
+      fields: {
+        person: { back_zh: '一个短发女人' },
+        outfit: { back_zh: '穿着米色风衣' },
+        pose: { back_zh: backCount === 1 ? '一只橘猫趴在窗台上' : '一只橘猫趴在窗台上晒太阳' },
+        scene: { back_zh: '樱花树下' },
+        light: { back_zh: '柔和的自然光' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '低质量、模糊、水印' },
+      notes: []
+    })));
+  };
+  return LocalLLM.review(settings(), {
+    fields: slots,
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' }
+  }, { fetchImpl: fetchImpl }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(result.review.corrected, true);
+    assert.strictEqual(result.review.round, 1);
+    assert.ok(result.review.correctedKeys.indexOf('pose') !== -1, 'pose 应被修正');
+    assert.strictEqual(result.review.initial.issues.length > 0, true);
+    assert.strictEqual(result.review.issues.length, 0, JSON.stringify(result.review.issues));
+    assert.strictEqual(result.review.status, 'clean');
+    assert.strictEqual(result.fields.pose.zh, '一只橘猫趴在窗台上晒太阳', '回译/修正不得改中文');
+    assert.ok(/in the sun/.test(result.fields.pose.en));
+    assert.strictEqual(backCount, 2, '修正后必须再做一次独立回译');
+    assert.strictEqual(correctionCalls, 1, '最多自动修正 1 轮');
+    const backRequests = sent.filter(function (body) { return /回译者/.test(body.messages[0].content); });
+    assert.strictEqual(backRequests.length, 2);
+    backRequests.forEach(function (body) {
+      assert.strictEqual(body.messages[1].content.indexOf('一只橘猫趴在窗台上晒太阳'), -1);
+      assert.strictEqual(body.messages[1].content.indexOf('晒太阳'), -1);
+    });
+    const fixRequest = sent.find(function (body) { return /修正器/.test(body.messages[0].content); });
+    assert.ok(fixRequest, '应发出修正请求');
+    const fixUser = JSON.parse(fixRequest.messages[1].content);
+    assert.ok(/晒太阳/.test(fixUser.current_fields.pose.zh), '修正请求允许携带权威中文');
+    assert.ok(fixUser.fix_keys.indexOf('pose') !== -1, '修正请求应包含 pose');
+  });
+});
+
+test('有限修正：修正后仍有差异不无限调用，状态保持需确认', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '一只橘猫趴在窗台上晒太阳';
+  slots.pose.en = 'an orange cat on the windowsill';
+  let backCount = 0;
+  let correctionCalls = 0;
+  const fetchImpl = function (url, init) {
+    const system = JSON.parse(init.body).messages[0].content;
+    if (/修正器/.test(system)) {
+      correctionCalls += 1;
+      return Promise.resolve(responseWith(JSON.stringify({
+        fields: {
+          person: { en: 'a woman with a short bob, seen in profile looking into the distance' },
+          outfit: { en: 'wearing a cream trench coat' },
+          pose: { en: 'an orange cat sitting on the windowsill' },
+          scene: { en: 'beneath a cherry tree' },
+          light: { en: 'soft natural light' },
+          style: { en: '' }
+        },
+        negative: { zh: '低质量', en: 'low quality' },
+        notes: []
+      })));
+    }
+    backCount += 1;
+    return Promise.resolve(responseWith(JSON.stringify({
+      fields: {
+        person: { back_zh: '一个短发女人' },
+        outfit: { back_zh: '穿着米色风衣' },
+        pose: { back_zh: '一只橘猫坐在窗台上' },
+        scene: { back_zh: '樱花树下' },
+        light: { back_zh: '柔和的自然光' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '低质量' },
+      notes: []
+    })));
+  };
+  return LocalLLM.review(settings(), {
+    fields: slots,
+    negative: { zh: '低质量', en: 'low quality' }
+  }, { fetchImpl: fetchImpl }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(result.review.status, 'mismatch');
+    assert.strictEqual(result.review.corrected, true);
+    assert.strictEqual(result.review.round, 1);
+    assert.strictEqual(correctionCalls, 1, '不能进行第二轮自动修正');
+    assert.strictEqual(backCount, 2);
+    assert.ok(result.review.issues.some(function (issue) { return /晒太阳/.test(issue.title + issue.detail); }));
+    assert.strictEqual(result.review.status === BV.STATUS.verified, false, '不一致不得自动标已确认');
+  });
+});
+
+test('修正请求失败：保留修正前英文和中文，报 error，不回退词库', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '一只橘猫趴在窗台上晒太阳';
+  slots.pose.en = 'an orange cat on the windowsill';
+  const before = JSON.parse(JSON.stringify(slots));
+  let correctionCalls = 0;
+  const fetchImpl = function (url, init) {
+    const system = JSON.parse(init.body).messages[0].content;
+    if (/修正器/.test(system)) {
+      correctionCalls += 1;
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
+    return Promise.resolve(responseWith(JSON.stringify({
+      fields: {
+        person: { back_zh: '一个短发女人' },
+        outfit: { back_zh: '穿着米色风衣' },
+        pose: { back_zh: '一只橘猫趴在窗台上' },
+        scene: { back_zh: '樱花树下' },
+        light: { back_zh: '柔和的自然光' },
+        style: { back_zh: '' }
+      },
+      negative: { back_zh: '低质量' },
+      notes: []
+    })));
+  };
+  return LocalLLM.review(settings(), {
+    fields: before,
+    negative: { zh: '低质量', en: 'low quality' }
+  }, { fetchImpl: fetchImpl }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'network');
+    assert.strictEqual(correctionCalls, 1);
+    assert.deepStrictEqual(PromptFlow.normalizeSlots(result.fields), PromptFlow.normalizeSlots(before), '修正失败必须保留修正前英文');
+    assert.strictEqual(result.review.status, 'error');
+    assert.ok(result.review.initial.issues.length > 0, '仍应保留已发现的差异');
+  });
+});
+
+test('回译超时：保留当前英文，报 error，不伪造回译', function () {
+  const steps = fieldState(successPayload());
+  const before = JSON.parse(JSON.stringify(steps));
+  const hanging = function (url, init) {
+    return new Promise(function (resolve, reject) {
+      init.signal.addEventListener('abort', function () {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  };
+  return LocalLLM.review(settings(), {
+    fields: before,
+    negative: { zh: '低质量', en: 'low quality' }
+  }, { fetchImpl: hanging, timeoutMs: 25 }).then(function (result) {
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.code, 'timeout');
+    assert.deepStrictEqual(PromptFlow.normalizeSlots(result.fields), PromptFlow.normalizeSlots(before));
+    assert.strictEqual(result.review.status, 'error');
+    assert.ok(/超时/.test(result.review.error));
+  });
+});
+
+test('校对状态：确认后才已校对，不一致不自动确认，编辑后失效，历史可恢复', function () {
+  const slots = fieldState(successPayload());
+  const clean = BV.normalizeReview({
+    status: BV.STATUS.clean,
+    issues: [],
+    slots: {},
+    negative: { zh: '', en: '', backZh: '', issues: [] },
+    snapshot: BV.snapshotOf(slots),
+    checkedAt: 1
+  });
+  assert.strictEqual(clean.status, 'clean');
+  const confirmed = BV.confirm(clean, slots);
+  assert.strictEqual(confirmed.status, 'verified');
+  assert.strictEqual(confirmed.confirmedWithIssues, false);
+
+  const mismatch = BV.normalizeReview({
+    status: BV.STATUS.mismatch,
+    issues: [{ type: 'missing-content', slot: 'pose', title: '漏译', detail: '少了晒太阳' }],
+    slots: {},
+    negative: { zh: '', en: '', backZh: '', issues: [] },
+    snapshot: BV.snapshotOf(slots),
+    checkedAt: 1
+  });
+  assert.notStrictEqual(mismatch.status, 'verified', '不一致不得自动标已确认');
+  const confirmedMismatch = BV.confirm(mismatch, slots);
+  assert.strictEqual(confirmedMismatch.status, 'verified');
+  assert.strictEqual(confirmedMismatch.confirmedWithIssues, true, '用户明确确认时保留差异记录');
+
+  const serialized = BV.serialize(confirmedMismatch);
+  const restored = BV.restore(serialized, slots);
+  assert.strictEqual(restored.status, 'verified');
+  assert.strictEqual(restored.confirmedWithIssues, true);
+
+  const edited = JSON.parse(JSON.stringify(slots));
+  edited.pose.zh = '女人转身走向门口';
+  PromptFlow.markChineseEdited(edited, 'pose');
+  const stale = BV.restore(serialized, edited);
+  assert.strictEqual(stale.status, 'unverified', '改中文后已校对状态必须失效');
+  assert.ok(/失效/.test(stale.staleReason));
+
+  const invalidated = BV.invalidate(confirmed);
+  assert.strictEqual(invalidated.status, 'unverified');
+  assert.strictEqual(BV.confirm(invalidated, slots).status, 'unverified', '未核对不能直接确认');
+});
+
+test('历史记录：校对状态、差异和回译快照可保存/恢复，旧记录按未核对处理', function () {
+  const slots = fieldState(successPayload());
+  const review = BV.normalizeReview({
+    status: BV.STATUS.mismatch,
+    corrected: true,
+    correctedKeys: ['pose'],
+    round: 1,
+    issues: [{ type: 'identity-conflict', slot: 'pose', title: '人物用词冲突', detail: '女人 vs 女孩' }],
+    slots: { pose: { zh: slots.pose.zh, en: slots.pose.en, backZh: '一个女孩转身', issues: [] } },
+    negative: { zh: '低质量', en: 'low quality', backZh: '低质量', issues: [] },
+    snapshot: BV.snapshotOf(slots),
+    checkedAt: 123
+  });
+  const record = {
+    id: 'r1',
+    slots: PromptFlow.serialize(slots),
+    review: BV.serialize(review),
+    reviewStatus: review.status,
+    reviewIssueCount: review.issues.length
+  };
+  const restoredSlots = PromptFlow.normalizeSlots(record.slots);
+  const restored = BV.restore(record.review, restoredSlots);
+  assert.strictEqual(restored.status, BV.STATUS.mismatch);
+  assert.strictEqual(restored.issues.length, 1);
+  assert.strictEqual(restored.corrected, true);
+  assert.strictEqual(restored.round, 1);
+  assert.strictEqual(restored.slots.pose.backZh, '一个女孩转身');
+
+  const legacy = BV.restore(undefined, restoredSlots);
+  assert.strictEqual(legacy.status, 'unverified');
+});
+
+test('app.js 接入：主流程自动回译、编辑失效、确认、历史保存校对状态', function () {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  assert.ok(/LocalLLM\.review\(/.test(app), '应调用独立回译校对');
+  assert.ok(/startReview\(\{\s*correct: true,\s*auto: true,\s*compareIdea: true\s*\}\)/.test(app), '初稿后应自动回译');
+  assert.ok(/startReview\(\{\s*correct: true,\s*keys: applied\.updated\.slice\(\)/.test(app), '重译后应回译');
+  assert.ok(/BilingualVerify\.invalidate\(state\.review\)/.test(app), '编辑后应使校对失效');
+  assert.ok(/BilingualVerify\.confirm\(review, state\.slots\)/.test(app), '确认按钮应进入已校对');
+  assert.ok(/review: BilingualVerify\.serialize\(state\.review\)/.test(app), '历史应保存校对状态');
+  assert.ok(/BilingualVerify\.restore\(record\.review, state\.slots\)/.test(app), '历史打开应恢复校对状态');
+  assert.ok(app.indexOf("setStatus('英文已按当前中文重译；中文未被改回。已刷新正/负提示词。'") === -1,
+    '重译后不应跳过回译直接宣称完成');
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(/id="reviewPanel"/.test(html), '页面应有校对面板');
+  assert.ok(html.indexOf('js/bilingual-verify.js') !== -1, '页面应加载校对模块');
+  assert.ok(html.indexOf('js/bilingual-verify.js') < html.indexOf('js/local-llm.js'),
+    'bilingual-verify 必须在 local-llm 之前加载');
+});
+
+test('修订失败/超时保留编辑的静态护栏：finishReview 不调用 fillFromParsed', function () {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  const start = app.indexOf('function finishReview');
+  const end = app.indexOf('function fillFromModel', start);
+  const block = app.slice(start, end > start ? end : start + 9000);
+  assert.ok(block.length > 1000);
+  assert.ok(block.indexOf('fillFromParsed') === -1);
+  assert.ok(block.indexOf('Parser.parse') === -1);
+  assert.ok(/已有编辑已保留/.test(block));
 });
 
 test('app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）', function () {

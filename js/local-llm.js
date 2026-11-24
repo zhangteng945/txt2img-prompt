@@ -7,7 +7,8 @@
  *   2. 清理 think 标签、解析唯一一个 JSON 对象；
  *   3. 校验六字段是否中英齐全、英文是否可用，并校验「补全」标记；
  *   4. 用户改中文后，用当前六个中文框 + 原始描述 + 现有英文作上下文，
- *      只重译待更新字段。
+ *      只重译待更新字段；
+ *   5. 实际英文的独立回译、结构化比对、最多 1 轮有限修正和再次回译复核。
  *
  * 失败一律返回 status:'error'，绝不自动改成规则/词库结果；规则路径只能由
  * 页面上的「改用规则生成（次要）」显式触发。
@@ -19,11 +20,16 @@
 
   const T2I = (window.T2I = window.T2I || {});
   const U = T2I.Utils;
+  const BilingualVerify = T2I.BilingualVerify;
 
   const DEFAULT_API_ROOT = 'https://macbook-pro.tail349cac.ts.net:11434';
   const DEFAULT_MODEL = 'qwen3.5:4b';
   const STORAGE_KEY = 't2i.localLLM.v1';
   const TIMEOUT_MS = 50000;
+  // 回译和修正各算一次串行请求；M1 16GB 上不并行，最多自动修正 1 轮。
+  const BACKTRANSLATE_TIMEOUT_MS = 45000;
+  const CORRECTION_TIMEOUT_MS = 50000;
+  const MAX_CORRECTIONS = 1;
   const SLOTS = ['person', 'outfit', 'pose', 'scene', 'light', 'style'];
   const SLOT_LABELS = {
     person: '人物与外貌',
@@ -168,6 +174,47 @@
     '{"fields":{"person":{"en":"..."},"outfit":{"en":"..."},"pose":{"en":"..."},"scene":{"en":"..."},"light":{"en":"..."},"style":{"en":"..."}},"negative":{"zh":"中文对照","en":"low quality, blurry, watermark"},"notes":[]}'
   ].join('\n');
 
+  const BACKTRANSLATE_PROMPT = [
+    '你是独立的英文生图提示词回译者。只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 <think> 标签。',
+    '',
+    '你会收到实际使用的英文生图提示词短语，按六个字段和 negative 分开。请把每个字段的英文忠实回译成简洁中文，只写英文实际表达的内容。',
+    '',
+    '硬规则：',
+    '1. 不补全、不猜测、不美化，不添加英文里没有的主体、动作、服装、颜色、数量、物体、方位或否定。',
+    '2. 保留主体、动作-对象关系、方位、数量、身体部位、服饰颜色和否定。',
+    '3. 每个字段单独回译，不要合并，不要改写英文。',
+    '4. 本次请求不会提供任何中文原文；不要参考任何中文原文，不要用外部词库或固定译法。',
+    '5. 否定照实翻译：no text -> 没有文字；no watermark -> 没有水印。',
+    '6. no smoking sign 是画面里的「禁止吸烟告示牌」，是标牌本身，不要改写成“不要出现吸烟”这类全局负面。',
+    '',
+    '输出结构（六个字段都要出现；英文为空的字段回译也留空）：',
+    '{"fields":{"person":{"back_zh":""},"outfit":{"back_zh":""},"pose":{"back_zh":""},"scene":{"back_zh":""},"light":{"back_zh":""},"style":{"back_zh":""}},"negative":{"back_zh":""},"notes":[]}'
+  ].join('\n');
+
+  const CORRECTION_PROMPT = [
+    '你是英文生图提示词的双向语义校对修正器。只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 <think> 标签。',
+    '',
+    '你会收到：current_fields（当前权威中文 + 实际英文）、backtranslation（实际英文的独立回译）、issues（结构化差异）、negative。',
+    '任务：只修正英文 en 和 negative.en，使实际英文与当前中文一致；中文是权威，绝不修改、回写或替换。',
+    '',
+    '英文形态（必须保持）：',
+    '- en 是逗号分隔的 SDXL / ComfyUI 生图提示词短语，不是英语叙述句。',
+    '- 保留主体、动作-对象关系、方位、数量、身体部位、服饰颜色和否定；写明谁做什么。',
+    '- 不参照、检索或模仿任何外部词库或固定译法。',
+    '',
+    '修正规则：',
+    '1. 只改 fix_keys 里的字段英文；其余字段英文原样保留。绝不在 fields 里输出中文。fix_negative 为 false 时 negative 原样返回，不要借机加词。',
+    '2. 修正漏译、凭空添加、主体/属性错绑、动作-对象关系、否定落位、数量、身体部位和重复罗列。',
+    '3. 不添加当前中文没有的主体、身份、人数、服装、颜色、动作、物体、光线或画风；也不删除中文里已有的要素。',
+    '4. 如果当前中文自身矛盾（例如下雨又晒太阳），或不同框的中文人物用词冲突（例如女孩/女人），不要擅自删掉一侧或替用户统一；两边都保留，并在 notes 里写明需要用户确认。',
+    '5. 画面里的「禁止吸烟」告示牌 / no smoking sign 是正面物体；只有当前中文明确要求画面不要出现吸烟时，才把 smoking 放进 negative。不要看到 no 就把它扔进负面。',
+    '6. 否定必须落位：中文说「不要文字，不要水印」，正面不能保留 no text / no watermark，负面要覆盖 text / watermark。',
+    '7. 回译多出原文没有的人物、物体、颜色或数量时，删掉多出的部分，不要靠增加另一侧来圆场。',
+    '',
+    '输出结构：',
+    '{"fields":{"person":{"en":""},"outfit":{"en":""},"pose":{"en":""},"scene":{"en":""},"light":{"en":""},"style":{"en":""}},"negative":{"zh":"中文对照","en":"low quality, blurry, watermark"},"notes":[]}'
+  ].join('\n');
+
   const REASONS = {
     'empty-input': '没有可解析的想法文本',
     'empty-fields': '本地模型没有返回任何可用的六个字段内容',
@@ -184,6 +231,9 @@
     'narrative-english': '本地模型返回的英文仍是叙述句，不是生图提示词短语',
     inferred: '模型补全了未提示要素，但「允许模型推测」处于关闭状态',
     'empty-negative': '本地模型没有给出可用的英文负面提示词',
+    'empty-backtranslation': '本地模型没有给出可用的独立中文回译',
+    'empty-english': '当前没有可回译的英文内容',
+    'correction-failed': '英文有限修正失败，已保留修正前的内容',
     'no-pending': '没有需要重新生成英文的字段',
     'empty-current': '当前六个中文框都是空的，没有可重译内容',
     unexpected: '本地模型请求出现未预期错误'
@@ -302,6 +352,40 @@
       };
     });
     return buildRequest(settings, RETRANSLATE_PROMPT, JSON.stringify(user, null, 2));
+  }
+
+  // 独立回译请求只携带实际英文，不携带 idea、current_fields.zh 或任何目标中文，
+  // 防止模型把用户中文抄回来当回译。
+  function buildBacktranslateRequest(settings, payload) {
+    const data = payload || {};
+    const fields = currentFieldPayload(data.fields);
+    const negative = data.negative || {};
+    const user = {
+      fields: {},
+      negative: { en: String(negative.en == null ? '' : negative.en) }
+    };
+    SLOTS.forEach(function (key) {
+      user.fields[key] = { en: fields[key].en };
+    });
+    return buildRequest(settings, BACKTRANSLATE_PROMPT, JSON.stringify(user, null, 2));
+  }
+
+  // 有限修正请求允许携带权威中文，因为它要据此改英文；但它不是回译请求。
+  function buildCorrectionRequest(settings, payload) {
+    const data = payload || {};
+    const fields = currentFieldPayload(data.fields);
+    const keys = (Array.isArray(data.keys) ? data.keys : SLOTS).filter(function (key) {
+      return SLOTS.indexOf(key) !== -1;
+    });
+    const user = {
+      current_fields: fields,
+      backtranslation: data.back || {},
+      issues: Array.isArray(data.issues) ? data.issues : [],
+      negative: data.negative || { zh: '', en: '' },
+      fix_keys: keys,
+      fix_negative: data.allowNegative === true
+    };
+    return buildRequest(settings, CORRECTION_PROMPT, JSON.stringify(user, null, 2));
   }
 
   function stripThinkAndFence(content) {
@@ -541,6 +625,115 @@
     return out;
   }
 
+  function cloneFieldPayload(fields) {
+    return currentFieldPayload(fields);
+  }
+
+  function normalizeReviewNegative(source) {
+    const raw = source && typeof source === 'object' ? source : {};
+    return {
+      zh: asText(raw.zh),
+      en: asText(raw.en)
+    };
+  }
+
+  function backEntry(source, key) {
+    const entry = source && source[key];
+    if (typeof entry === 'string') return asText(entry);
+    if (!entry || typeof entry !== 'object') return '';
+    return asText(entry.back_zh || entry.backtranslation || entry.backZh || entry.zh);
+  }
+
+  function normalizeBacktranslation(data, fields, negative) {
+    const source = data && (data.fields || data.backtranslation || data.back || null);
+    const root = source && typeof source === 'object' ? source : (data && typeof data === 'object' ? data : {});
+    const out = Object.create(null);
+    const missing = [];
+    SLOTS.forEach(function (key) {
+      const backZh = backEntry(root, key);
+      if (fields[key].en && !backZh) missing.push(SLOT_LABELS[key] || key);
+      out[key] = { back_zh: backZh };
+    });
+    let backNegative = '';
+    if (data && typeof data.negative === 'string') {
+      backNegative = asText(data.negative);
+    } else if (data && data.negative && typeof data.negative === 'object') {
+      backNegative = asText(data.negative.back_zh || data.negative.backtranslation || data.negative.zh);
+    }
+    if (!backNegative && data && (data.negative_back_zh || data.negativeBackZh)) {
+      backNegative = asText(data.negative_back_zh || data.negativeBackZh);
+    }
+    if (negative && negative.en && !backNegative) missing.push('负面提示词');
+    if (missing.length) {
+      throw codedError('empty-backtranslation', '独立回译缺少：' + missing.join('、'));
+    }
+    return {
+      fields: out,
+      negative: { back_zh: backNegative },
+      notes: normalizeNotes(data)
+    };
+  }
+
+  function normalizeCorrection(data, fields, keys) {
+    const source = fieldMap(data);
+    const out = Object.create(null);
+    const missing = [];
+    keys.forEach(function (key) {
+      const currentZh = asText(fields && fields[key] && fields[key].zh);
+      const entry = source[key];
+      const en = entry ? usableEn(entry.en) : '';
+      if (currentZh && !en) {
+        missing.push(SLOT_LABELS[key] || key);
+        return;
+      }
+      if (!currentZh) {
+        out[key] = { en: '' };
+        return;
+      }
+      assertPromptStyle(en, key);
+      out[key] = { en: en };
+    });
+    if (missing.length) {
+      throw codedError('missing-english', '修正结果缺少：' + missing.join('、'));
+    }
+    let negative = null;
+    if (data && data.negative && typeof data.negative === 'object' && data.negative.en) {
+      negative = normalizeNegative(data);
+    }
+    return {
+      fields: out,
+      negative: negative,
+      notes: normalizeNotes(data)
+    };
+  }
+
+  function applyCorrection(fields, negative, correction, keys, allowNegative) {
+    const nextFields = cloneFieldPayload(fields);
+    const nextNegative = normalizeReviewNegative(negative);
+    const changed = [];
+    keys.forEach(function (key) {
+      const entry = correction.fields && correction.fields[key];
+      if (!entry) return;
+      const en = String(entry.en == null ? '' : entry.en);
+      if (en !== nextFields[key].en) {
+        nextFields[key].en = en;
+        if (changed.indexOf(key) === -1) changed.push(key);
+      }
+    });
+    let negativeChanged = false;
+    if (allowNegative && correction.negative) {
+      nextNegative.zh = correction.negative.zh || nextNegative.zh;
+      nextNegative.en = correction.negative.en || nextNegative.en;
+      negativeChanged = true;
+    }
+    return {
+      fields: nextFields,
+      negative: nextNegative,
+      changed: changed,
+      negativeChanged: negativeChanged
+    };
+  }
+
   function snippet(text) {
     return String(text == null ? '' : text).replace(/\s+/g, ' ').slice(0, 180);
   }
@@ -688,6 +881,361 @@
     return out;
   }
 
+  function reviewFailure(code, request, started, fields, negative, extra) {
+    const reason = reasonText(code);
+    const out = {
+      status: 'error',
+      requested: true,
+      code: code,
+      reason: reason,
+      fields: cloneFieldPayload(fields),
+      negative: normalizeReviewNegative(negative),
+      elapsedMs: Date.now() - started,
+      model: request ? request.model : '',
+      endpoint: request ? request.url : '',
+      review: {
+        status: 'error',
+        error: reason,
+        issues: [],
+        slots: {},
+        negative: { zh: '', en: '', backZh: '', issues: [] },
+        snapshot: BilingualVerify.snapshotOf(fields),
+        checkedAt: Date.now(),
+        model: request ? request.model : '',
+        calls: []
+      }
+    };
+    const baseReview = out.review;
+    if (extra) {
+      Object.keys(extra).forEach(function (key) {
+        if (key !== 'review') out[key] = extra[key];
+      });
+    }
+    if (extra && extra.review) {
+      out.review = Object.assign({}, baseReview, extra.review);
+    }
+    return out;
+  }
+
+  function backtranslate(settings, payload, options) {
+    const opts = options || {};
+    const started = Date.now();
+    const data = payload || {};
+    const fields = currentFieldPayload(data.fields);
+    const negative = normalizeReviewNegative(data.negative);
+    const hasEnglish = SLOTS.some(function (key) { return !!fields[key].en; }) || !!negative.en;
+    if (!hasEnglish) {
+      return Promise.resolve({
+        status: 'error',
+        requested: false,
+        code: 'empty-english',
+        reason: reasonText('empty-english'),
+        elapsedMs: 0
+      });
+    }
+    const request = buildBacktranslateRequest(settings, { fields: fields, negative: negative });
+    return runRequest(request, {
+      signal: opts.signal,
+      fetchImpl: opts.fetchImpl,
+      timeoutMs: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : BACKTRANSLATE_TIMEOUT_MS
+    }, started).then(function (response) {
+      let parsed;
+      try {
+        parsed = parseModelContent(response.content);
+      } catch (err) {
+        throw codedError('invalid-json', '回译内容不是有效 JSON', {
+          detail: snippet(stripThinkAndFence(response.content))
+        });
+      }
+      const normalized = normalizeBacktranslation(parsed, fields, negative);
+      return {
+        status: 'ok',
+        requested: true,
+        code: 'ok',
+        reason: '独立回译完成',
+        fields: normalized.fields,
+        negative: normalized.negative,
+        notes: normalized.notes,
+        model: request.model,
+        endpoint: request.url,
+        elapsedMs: Date.now() - started
+      };
+    }).catch(function (err) {
+      const code = (err && err.code) || 'unexpected';
+      return failure(code, request, started, {
+        detail: err && err.message ? snippet(err.message) : ''
+      });
+    });
+  }
+
+  function correct(settings, payload, options) {
+    const opts = options || {};
+    const started = Date.now();
+    const data = payload || {};
+    const fields = currentFieldPayload(data.fields);
+    const negative = normalizeReviewNegative(data.negative);
+    const keys = (Array.isArray(data.keys) ? data.keys : SLOTS).filter(function (key) {
+      return SLOTS.indexOf(key) !== -1;
+    });
+    const request = buildCorrectionRequest(settings, {
+      fields: fields,
+      back: data.back || {},
+      issues: data.issues || [],
+      negative: negative,
+      keys: keys,
+      allowNegative: data.allowNegative === true
+    });
+    return runRequest(request, {
+      signal: opts.signal,
+      fetchImpl: opts.fetchImpl,
+      timeoutMs: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : CORRECTION_TIMEOUT_MS
+    }, started).then(function (response) {
+      let parsed;
+      try {
+        parsed = parseModelContent(response.content);
+      } catch (err) {
+        throw codedError('invalid-json', '修正内容不是有效 JSON', {
+          detail: snippet(stripThinkAndFence(response.content))
+        });
+      }
+      const normalized = normalizeCorrection(parsed, fields, keys);
+      return {
+        status: 'ok',
+        requested: true,
+        code: 'ok',
+        reason: '英文有限修正完成',
+        keys: keys,
+        fields: normalized.fields,
+        negative: normalized.negative,
+        notes: normalized.notes,
+        model: request.model,
+        endpoint: request.url,
+        elapsedMs: Date.now() - started
+      };
+    }).catch(function (err) {
+      const code = (err && err.code) || 'unexpected';
+      return failure(code, request, started, {
+        detail: err && err.message ? snippet(err.message) : ''
+      });
+    });
+  }
+
+  /*
+   * 双向校对编排（串行，最多自动修正 1 轮）：
+   *   1. 只拿实际英文做独立回译；
+   *   2. 与权威中文比对，结构化记录差异；
+   *   3. 有可修正差异时，按当前中文修一次英文；
+   *   4. 再独立回译一次复核。
+   * 任何一步失败都返回 error，并保留调用前的英文和中文；不回退词库。
+   */
+  async function review(settings, payload, options) {
+    const opts = options || {};
+    const started = Date.now();
+    const data = payload || {};
+    const originalFields = currentFieldPayload(data.fields);
+    const originalNegative = normalizeReviewNegative(data.negative);
+    const allowedKeys = (Array.isArray(opts.keys) ? opts.keys : SLOTS).filter(function (key) {
+      return SLOTS.indexOf(key) !== -1;
+    });
+    const maxCorrections = Math.max(0, Math.min(MAX_CORRECTIONS,
+      opts.maxCorrections == null ? MAX_CORRECTIONS : Number(opts.maxCorrections) || 0));
+    const correctEnabled = opts.correct !== false && maxCorrections > 0;
+    const calls = [];
+
+    if (!SLOTS.some(function (key) { return !!originalFields[key].en; })) {
+      return reviewFailure('empty-english', null, started, originalFields, originalNegative, {
+        review: { error: reasonText('empty-english') }
+      });
+    }
+
+    const first = await backtranslate(settings, {
+      fields: originalFields,
+      negative: originalNegative
+    }, {
+      signal: opts.signal,
+      fetchImpl: opts.fetchImpl,
+      timeoutMs: opts.timeoutMs
+    });
+    calls.push({ op: 'backtranslate', code: first.code, elapsedMs: first.elapsedMs });
+    if (first.status !== 'ok') {
+      return reviewFailure(first.code, first.request, started, originalFields, originalNegative, {
+        detail: first.detail,
+        calls: calls,
+        review: { error: first.reason, calls: calls }
+      });
+    }
+
+    const initialComparison = BilingualVerify.compare({
+      fields: originalFields,
+      back: first.fields,
+      negative: originalNegative,
+      backNegative: first.negative,
+      idea: data.idea,
+      compareIdea: data.compareIdea === true
+    });
+    const initial = {
+      fields: cloneFieldPayload(originalFields),
+      negative: normalizeReviewNegative(originalNegative),
+      back: first.fields,
+      backNegative: first.negative,
+      issues: initialComparison.issues,
+      status: initialComparison.status
+    };
+
+    let currentFields = cloneFieldPayload(originalFields);
+    let currentNegative = normalizeReviewNegative(originalNegative);
+    let finalComparison = initialComparison;
+    let finalBack = first;
+    let corrected = false;
+    let correctedKeys = [];
+    let correctionError = '';
+    let recheckError = '';
+
+    const fixable = initialComparison.issues.filter(function (issue) {
+      if (!issue.fixable) return false;
+      if (issue.slot === 'negative') return true;
+      return allowedKeys.indexOf(issue.slot) !== -1;
+    });
+    const correctionKeys = [];
+    fixable.forEach(function (issue) {
+      if (issue.slot !== 'negative' && correctionKeys.indexOf(issue.slot) === -1) correctionKeys.push(issue.slot);
+    });
+
+    if (correctEnabled && fixable.length) {
+      const correction = await correct(settings, {
+        fields: currentFields,
+        back: first.fields,
+        issues: fixable,
+        negative: currentNegative,
+        keys: correctionKeys,
+        allowNegative: fixable.some(function (issue) { return issue.slot === 'negative'; })
+      }, {
+        signal: opts.signal,
+        fetchImpl: opts.fetchImpl,
+        timeoutMs: opts.correctionTimeoutMs
+      });
+      calls.push({ op: 'correct', code: correction.code, elapsedMs: correction.elapsedMs });
+      if (correction.status !== 'ok') {
+        correctionError = correction.reason;
+        return reviewFailure(correction.code, correction.request, started, currentFields, currentNegative, {
+          detail: correction.detail,
+          calls: calls,
+          review: {
+            status: 'error',
+            error: '有限修正失败：' + correction.reason,
+            issues: initialComparison.issues,
+            slots: initialComparison.slots,
+            negative: initialComparison.negative,
+            snapshot: BilingualVerify.snapshotOf(currentFields),
+            checkedAt: Date.now(),
+            model: correction.model,
+            calls: calls,
+            initial: initial,
+            corrected: false,
+            correctedKeys: []
+          }
+        });
+      }
+
+      const applied = applyCorrection(currentFields, currentNegative, correction, correctionKeys,
+        fixable.some(function (issue) { return issue.slot === 'negative'; }));
+      currentFields = applied.fields;
+      currentNegative = applied.negative;
+      corrected = applied.changed.length > 0 || applied.negativeChanged;
+      correctedKeys = applied.changed.slice();
+      if (corrected) {
+        const second = await backtranslate(settings, {
+          fields: currentFields,
+          negative: currentNegative
+        }, {
+          signal: opts.signal,
+          fetchImpl: opts.fetchImpl,
+          timeoutMs: opts.timeoutMs
+        });
+        calls.push({ op: 'backtranslate', code: second.code, elapsedMs: second.elapsedMs });
+        if (second.status !== 'ok') {
+          recheckError = second.reason;
+          const errorReview = {
+            status: 'error',
+            error: '修正后的再次回译失败：' + second.reason,
+            issues: initialComparison.issues,
+            slots: initialComparison.slots,
+            negative: initialComparison.negative,
+            snapshot: BilingualVerify.snapshotOf(currentFields),
+            checkedAt: Date.now(),
+            model: second.model || first.model,
+            calls: calls,
+            initial: initial,
+            corrected: true,
+            correctedKeys: correctedKeys.slice(),
+            round: 1
+          };
+          const out = reviewFailure(second.code, second.request, started, currentFields, currentNegative, {
+            detail: second.detail,
+            calls: calls,
+            review: errorReview
+          });
+          out.review = errorReview;
+          out.review.corrected = true;
+          out.review.correctedKeys = correctedKeys.slice();
+          return out;
+        }
+        finalBack = second;
+        finalComparison = BilingualVerify.compare({
+          fields: currentFields,
+          back: second.fields,
+          negative: currentNegative,
+          backNegative: second.negative,
+          idea: data.idea,
+          compareIdea: data.compareIdea === true
+        });
+      }
+    }
+
+    const finalReview = {
+      status: finalComparison.status,
+      round: corrected ? 1 : 0,
+      corrected: corrected,
+      correctedKeys: correctedKeys.slice(),
+      issues: finalComparison.issues,
+      slots: finalComparison.slots,
+      negative: finalComparison.negative,
+      snapshot: BilingualVerify.snapshotOf(currentFields),
+      checkedAt: Date.now(),
+      model: first.model || (finalBack && finalBack.model) || '',
+      auto: opts.auto === true,
+      error: correctionError || recheckError,
+      calls: calls,
+      initial: initial,
+      final: {
+        fields: cloneFieldPayload(currentFields),
+        negative: normalizeReviewNegative(currentNegative),
+        back: finalBack.fields,
+        backNegative: finalBack.negative,
+        issues: finalComparison.issues,
+        status: finalComparison.status
+      }
+    };
+
+    return {
+      status: 'ok',
+      requested: true,
+      code: 'ok',
+      reason: finalComparison.status === 'clean'
+        ? '独立回译复核完成，未见明显差异'
+        : '独立回译复核完成，存在需要确认的差异',
+      reviewStatus: finalComparison.status,
+      fields: currentFields,
+      negative: currentNegative,
+      review: finalReview,
+      model: finalReview.model,
+      endpoint: first.endpoint,
+      elapsedMs: Date.now() - started,
+      calls: calls
+    };
+  }
+
+
   function generate(settings, idea, options) {
     const opts = options || {};
     const started = Date.now();
@@ -709,7 +1257,7 @@
         data = parseModelContent(response.content);
       } catch (err) {
         throw codedError('invalid-json', '返回内容不是有效 JSON', {
-          detail: snippet(response.content)
+          detail: snippet(stripThinkAndFence(response.content))
         });
       }
       let normalized;
@@ -782,7 +1330,7 @@
         parsed = parseModelContent(response.content);
       } catch (err) {
         throw codedError('invalid-json', '返回内容不是有效 JSON', {
-          detail: snippet(response.content)
+          detail: snippet(stripThinkAndFence(response.content))
         });
       }
       const normalized = normalizeRetranslation(parsed, pending, fields);
@@ -817,6 +1365,9 @@
     DEFAULT_MODEL: DEFAULT_MODEL,
     STORAGE_KEY: STORAGE_KEY,
     TIMEOUT_MS: TIMEOUT_MS,
+    BACKTRANSLATE_TIMEOUT_MS: BACKTRANSLATE_TIMEOUT_MS,
+    CORRECTION_TIMEOUT_MS: CORRECTION_TIMEOUT_MS,
+    MAX_CORRECTIONS: MAX_CORRECTIONS,
     SLOTS: SLOTS,
     SLOT_LABELS: SLOT_LABELS,
     defaultSettings: defaultSettings,
@@ -828,11 +1379,18 @@
     buildRequest: buildRequest,
     buildGenerateRequest: buildGenerateRequest,
     buildRetranslateRequest: buildRetranslateRequest,
+    buildBacktranslateRequest: buildBacktranslateRequest,
+    buildCorrectionRequest: buildCorrectionRequest,
     parseModelContent: parseModelContent,
     normalizeInitial: normalizeInitial,
     normalizeRetranslation: normalizeRetranslation,
+    normalizeBacktranslation: normalizeBacktranslation,
+    normalizeCorrection: normalizeCorrection,
     generate: generate,
     retranslate: retranslate,
+    backtranslate: backtranslate,
+    correct: correct,
+    review: review,
     compile: compile,
     reasonText: reasonText
   };

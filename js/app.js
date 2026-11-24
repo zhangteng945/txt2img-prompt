@@ -16,6 +16,7 @@
   const Assemble = T2I.Assemble;
   const Negative = T2I.Negative;
   const Feedback = T2I.Feedback;
+  const Scene = T2I.Scene;
 
   const STORAGE_KEYS = {
     favorites: 't2i.favorites.v1',
@@ -52,7 +53,9 @@
     storageOK: true,
     toastTimer: null,
     searchTimer: null,
-    lastFocused: null
+    lastFocused: null,
+    allowCompletion: false,
+    verify: null
   };
 
   const el = {
@@ -63,7 +66,10 @@
     parseStatus: document.getElementById('parseStatus'),
     slotGrid: document.getElementById('slotGrid'),
     warningBanner: document.getElementById('warningBanner'),
+    warningTitle: document.getElementById('warningTitle'),
     warningText: document.getElementById('warningText'),
+    scenePanel: document.getElementById('scenePanel'),
+    allowCompletion: document.getElementById('allowCompletion'),
     generateBtn: document.getElementById('generateBtn'),
     outputSection: document.getElementById('outputSection'),
     outputMeta: document.getElementById('outputMeta'),
@@ -333,16 +339,128 @@
     SF.slots.forEach(refreshCompletionUI);
   }
 
-  function showWarning(unknown) {
-    if (!unknown || !unknown.length) {
+  function sceneChip(label, value, className) {
+    return '<span class="scene-chip' + (className ? ' ' + className : '') + '">' +
+      '<span>' + escapeHtml(label) + '</span>' +
+      (value ? '<code>' + escapeHtml(value) + '</code>' : '') +
+      '</span>';
+  }
+
+  function relationLabel(type) {
+    const map = {
+      wearing: '穿着', next_to: '在…旁边', located: '位于', pose: '动作',
+      distance: '距离', holding: '拿着'
+    };
+    return map[type] || type;
+  }
+
+  function renderScene(scene) {
+    if (!el.scenePanel) return;
+    if (!scene || (!scene.structured && !(scene.negations && scene.negations.length))) {
+      el.scenePanel.hidden = true;
+      el.scenePanel.innerHTML = '';
+      return;
+    }
+    const groups = [];
+    if (scene.subjects && scene.subjects.length) {
+      groups.push('<div class="scene-group"><h4>主体</h4><div class="scene-chip-row">' +
+        scene.subjects.map(function (subject) {
+          const attrs = (subject.attributes || []).map(function (a) { return a.zh + ' → ' + a.en; }).join('；');
+          return sceneChip(subject.zh, subject.en + (attrs ? '；' + attrs : ''));
+        }).join('') + '</div></div>');
+    }
+    if (scene.outfits && scene.outfits.length) {
+      groups.push('<div class="scene-group"><h4>服饰与颜色</h4><div class="scene-chip-row">' +
+        scene.outfits.map(function (outfit) {
+          return sceneChip(outfit.zh, outfit.en + (outfit.color ? '（' + outfit.color.zh + ' → ' + outfit.color.en + '）' : ''));
+        }).join('') + '</div></div>');
+    }
+    if (scene.objects && scene.objects.length) {
+      groups.push('<div class="scene-group"><h4>物体与属性</h4><div class="scene-chip-row">' +
+        scene.objects.map(function (object) {
+          const extras = [];
+          if (object.color) extras.push(object.color.zh + ' → ' + object.color.en);
+          if (object.distance) extras.push(object.distance + ' → 只作用于该物体');
+          return sceneChip(object.zh, object.en + (extras.length ? '（' + extras.join('；') + '）' : ''));
+        }).join('') + '</div></div>');
+    }
+    if (scene.actions && scene.actions.length) {
+      groups.push('<div class="scene-group"><h4>动作</h4><div class="scene-chip-row">' +
+        scene.actions.map(function (action) { return sceneChip(action.zh, action.en); }).join('') +
+        '</div></div>');
+    }
+    if (scene.relations && scene.relations.length) {
+      groups.push('<div class="scene-group"><h4>关系</h4><div class="scene-chip-row">' +
+        scene.relations.map(function (relation) {
+          return sceneChip(relationLabel(relation.type), relation.en || relation.verify || relation.zh);
+        }).join('') + '</div></div>');
+    }
+    if (scene.negations && scene.negations.length) {
+      groups.push('<div class="scene-group"><h4>排除 / 否定</h4><div class="scene-chip-row">' +
+        scene.negations.map(function (negation) {
+          const targets = (negation.targets || []).map(function (t) { return t.zh + ' → ' + t.en; }).join('；');
+          return sceneChip((negation.scope === 'global' ? '整体排除' : negation.scope + ' 局部排除'), targets, 'is-negation');
+        }).join('') + '</div></div>');
+    }
+    if (scene.scopes && scene.scopes.length) {
+      groups.push('<div class="scene-group"><h4>作用范围</h4><div class="scene-chip-row">' +
+        scene.scopes.map(function (scope) {
+          const label = (scope.polarity === 'allow' ? '允许' : scope.polarity === 'apply' ? '应用' : '排除') +
+            ' · ' + (scope.scope === 'subject' ? '人物' : scope.scope === 'background' ? '背景' : scope.scope === 'all' ? '整体' : '整体');
+          let value = scope.target || '';
+          if (scope.exception) value += '；例外：' + scope.exception + ' → 不在作用范围内';
+          return sceneChip(label, value);
+        }).join('') + '</div></div>');
+    }
+    if (scene.ambiguities && scene.ambiguities.length) {
+      groups.push('<div class="scene-group"><h4>保留的歧义（未替你拍板）</h4><div class="scene-chip-row">' +
+        scene.ambiguities.map(function (item) {
+          return sceneChip('可能切法', item.alternatives.join(' / '), 'is-ambiguous');
+        }).join('') + '</div><p class="scene-note">当前按上下文选择了：' +
+        escapeHtml(scene.ambiguities[0].chosen || '') + '。如果不符合你的原意，可直接改六个框。</p></div>');
+    }
+    if (scene.unknown && scene.unknown.length) {
+      groups.push('<div class="scene-group"><h4>未处理部分（保留原文，不假装完整）</h4><div class="scene-chip-row">' +
+        scene.unknown.map(function (item) { return sceneChip(item, '未收录，已保留原文', 'is-negative'); }).join('') +
+        '</div></div>');
+    }
+    const summary = scene.summary || {};
+    el.scenePanel.innerHTML =
+      '<div class="scene-panel-head"><strong>结构化场景</strong>' +
+      '<span>' + (scene.structured ? '六个框由这棵树投影' : '部分内容退回原有片段解析') +
+      ' · 主体 ' + (summary.subjectCount || 0) +
+      ' · 物体 ' + (summary.objectCount || 0) +
+      ' · 关系 ' + (summary.relationCount || 0) +
+      ' · 否定 ' + (summary.negationCount || 0) +
+      ' · 未识别 ' + (scene.unknown ? scene.unknown.length : 0) + '</span></div>' +
+      groups.join('');
+    el.scenePanel.hidden = false;
+  }
+
+  function showWarning(unknown, issues) {
+    const list = unknown || [];
+    const issueList = (issues || []).filter(function (issue) {
+      return issue && issue.message;
+    });
+    if (!list.length && !issueList.length) {
       el.warningBanner.hidden = true;
       el.warningText.textContent = '';
       return;
     }
+    const errors = issueList.filter(function (issue) { return issue.severity === 'error'; });
     el.warningBanner.hidden = false;
-    el.warningText.textContent =
-      '未收录：' + unknown.join('、') + '。这些原文已保留在英文框里，没有被清空，也已自动记入本机「待补录」，不用再手抄。' +
-      '你可以直接改英文，或点「查看待补录」写备注并导出给大肥鱼补词。';
+    if (el.warningTitle) {
+      el.warningTitle.textContent = errors.length ? '语义守恒检查未通过' : '有未收录内容';
+    }
+    const parts = [];
+    if (list.length) {
+      parts.push('未收录：' + list.join('、') + '。这些原文已保留在英文框里，没有被清空，也已自动记入本机「待补录」，不用再手抄。' +
+        '你可以直接改英文，或点「查看待补录」写备注并导出给大肥鱼补词。');
+    }
+    issueList.forEach(function (issue) {
+      parts.push((issue.severity === 'error' ? '必须处理：' : '提示：') + issue.message);
+    });
+    el.warningText.textContent = parts.join(' ');
   }
 
   function updateWarningFromState() {
@@ -352,7 +470,7 @@
         if (!all.includes(u)) all.push(u);
       });
     });
-    showWarning(all);
+    showWarning(all, state.verify ? state.verify.issues : []);
   }
 
   function hideOutput() {
@@ -438,8 +556,11 @@
     if (!hasContent) return null;
 
     ensureEnglishForAllSlots();
-    const assembled = Assemble.assemble(state.slots);
-    const negative = Negative.build(assembled.positiveEn);
+    const scene = state.parsed && state.parsed.scene && state.parsed.raw === el.idea.value.trim()
+      ? state.parsed.scene
+      : null;
+    const assembled = Assemble.assemble(state.slots, { quality: state.allowCompletion });
+    const negative = Negative.build(assembled.positiveEn, scene ? Scene.negativePlan(scene) : null);
     return {
       version: 1,
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -735,7 +856,10 @@
     });
 
     state.slots = fresh;
+    state.parsed = null;
+    state.verify = null;
     state.unknownBySlot = Object.create(null);
+    renderScene(null);
     el.idea.value = record.idea || '';
     updateIdeaCount();
     writeAllSlotsToDom();
@@ -1060,17 +1184,22 @@
   function runFill() {
     const idea = el.idea.value.trim();
     if (!idea) {
-      setStatus('先写一句整体想法，再点「补全并填入各框」。', true);
+      setStatus('先写一句整体想法，再点「解析并填入各框」。', true);
       el.idea.focus();
       return;
     }
 
     const parsed = Parser.parse(idea);
+    const scene = parsed.scene;
+    const hasUnits = scene ? (scene.units || []).length > 0 : (parsed.segments || []).length > 0;
+    const hasConstraints = !!(scene && ((scene.negations || []).length || (scene.scopes || []).length));
+    state.verify = null;
 
-    if (!parsed.segments.length) {
+    if (!hasUnits && !hasConstraints) {
       state.slots = SF.emptySlots();
       state.unknownBySlot = Object.create(null);
       writeAllSlotsToDom();
+      renderScene(scene);
       updateWarningFromState();
       hideOutput();
       setStatus('这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
@@ -1078,7 +1207,7 @@
     }
 
     const filled = SF.fill(parsed);
-    const completed = Complete.complete(filled.slots);
+    const completed = Complete.complete(filled.slots, { enabled: state.allowCompletion });
     state.slots = completed.slots;
     state.parsed = parsed;
     state.unknownBySlot = Object.create(null);
@@ -1090,26 +1219,46 @@
         });
       });
     });
+    // 场景级未识别内容可能没有落在任何框里，也要给待补录一个明确位置。
+    if (scene && scene.unknown && scene.unknown.length) {
+      const known = [];
+      SF.slots.forEach(function (key) {
+        (state.unknownBySlot[key] || []).forEach(function (u) { known.push(u); });
+      });
+      scene.unknown.forEach(function (item) {
+        if (known.includes(item)) return;
+        if (!state.unknownBySlot.scene.includes(item)) state.unknownBySlot.scene.push(item);
+      });
+    }
 
     writeAllSlotsToDom();
+    renderScene(scene);
     updateWarningFromState();
     collectFeedback(idea);
     hideOutput();
 
     const counts = {};
     SF.slots.forEach(function (key) { counts[key] = state.slots[key].items.length; });
-    const segmentCount = parsed.segments.length;
-    const completionCount = completed.added.length;
     const summary = SF.definitions
       .map(function (def) { return def.label.replace(/与.*/, '') + ' ' + counts[def.key]; })
       .join(' · ');
+    const completionCount = completed.added.length;
+    const structure = scene && scene.structured
+      ? '结构化场景：主体 ' + (scene.summary.subjectCount || 0) +
+        ' · 物体 ' + (scene.summary.objectCount || 0) +
+        ' · 关系 ' + (scene.summary.relationCount || 0) +
+        ' · 否定 ' + (scene.summary.negationCount || 0) + '。'
+      : '部分内容沿用了片段解析。';
 
-    if (!segmentCount) {
+    if (!hasUnits && hasConstraints) {
+      setStatus('只解析出否定 / 作用范围约束：正面框为空，负面提示词会按约束生成。可继续补充想画的内容。', false);
+    } else if (!hasUnits) {
       setStatus('这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
     } else {
       setStatus(
-        '已拆成 ' + segmentCount + ' 个片段（' + summary + '），规则补全 ' +
-        completionCount + ' 项。补全内容在框下方标出，可直接改或删。',
+        structure + '已投影到六框（' + summary + '）。' +
+        (state.allowCompletion ? '规则补全 ' + completionCount + ' 项，已在框下标出。' : '规则补全默认关闭，没有擅自补光线/镜头/画风。') +
+        (scene && scene.ambiguities && scene.ambiguities.length ? ' 分词仍有备选解释，已保留在结构化场景里。' : ''),
         false
       );
     }
@@ -1141,7 +1290,9 @@
     state.slots = SF.emptySlots();
     state.parsed = null;
     state.generated = null;
+    state.verify = null;
     state.unknownBySlot = Object.create(null);
+    renderScene(null);
     el.idea.value = '';
     updateIdeaCount();
     writeAllSlotsToDom();
@@ -1208,26 +1359,42 @@
 
     recomputeUnknownBySlot();
     ensureEnglishForAllSlots();
-    const assembled = Assemble.assemble(state.slots);
-    if (!assembled.positiveEn.trim()) {
-      setStatus('六个框还是空的。先在上方写整体想法并「补全并填入各框」，或直接填写任一框。', true);
+    const assembled = Assemble.assemble(state.slots, { quality: state.allowCompletion });
+    const scene = state.parsed && state.parsed.scene && state.parsed.raw === el.idea.value.trim()
+      ? state.parsed.scene
+      : null;
+    const negativePlan = scene ? Scene.negativePlan(scene) : { extra: [], suppress: [], notes: [] };
+    const negative = Negative.build(assembled.positiveEn, negativePlan);
+    const verify = scene ? Scene.verify(scene, state.slots, assembled, negative) : null;
+    state.verify = verify;
+
+    const onlyNegative = !!(scene && !assembled.positiveEn.trim() &&
+      ((scene.negations || []).length || (scene.scopes || []).some(function (scope) { return scope.polarity === 'exclude'; })));
+    if (!assembled.positiveEn.trim() && !onlyNegative) {
+      setStatus('六个框还是空的。先在上方写整体想法并「解析并填入各框」，或直接填写任一框。', true);
       el.idea.focus();
       return;
     }
 
-    const negative = Negative.build(assembled.positiveEn);
-    state.generated = { positive: assembled, negative: negative };
+    state.generated = { positive: assembled, negative: negative, verify: verify };
 
     el.positiveEn.value = assembled.positiveEn;
-    el.positiveZh.textContent = assembled.positiveZh || '（中文框为空，暂无可对照内容）';
+    el.positiveZh.textContent = assembled.positiveZh || (onlyNegative ? '（只有负面约束，没有正面内容）' : '（中文框为空，暂无可对照内容）');
     el.negativeEn.value = negative.negativeEn;
     el.negativeZh.textContent = negative.negativeZh;
     el.outputMeta.textContent =
       assembled.phraseCount + ' 个正面短语 · ' + negative.items.length + ' 个负面词' +
+      (negative.extraItems.length ? ' · 其中 ' + negative.extraItems.length + ' 个来自本轮否定/范围约束' : '') +
       (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '');
-    el.outputFootnote.textContent = assembled.quality.length
-      ? '末尾质量词为算法补全：' + assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。'
-      : '正面已包含常用质量词，未重复添加。';
+
+    if (assembled.quality.length) {
+      el.outputFootnote.textContent = '末尾质量词为勾选规则补全后加入：' +
+        assembled.quality.join(', ') + '（中文：' + assembled.qualityZh.join('，') + '）。';
+    } else if (onlyNegative) {
+      el.outputFootnote.textContent = '本轮只有否定 / 作用范围约束，正面提示词为空；负面提示词已按局部约束生成，没有升级成全局否定。';
+    } else {
+      el.outputFootnote.textContent = '未勾选规则补全：没有自动添加光线、镜头、画风或质量词。';
+    }
 
     el.outputSection.hidden = false;
     autoSizePrompt(el.positiveEn);
@@ -1238,8 +1405,16 @@
     }, 60);
     updateWarningFromState();
     collectFeedback(el.idea.value);
-    if (assembled.hasUntranslated) {
+
+    if (verify && verify.incomplete) {
+      const message = verify.issues.length ? verify.issues[0].message : '仍有未处理部分';
+      showToast('语义守恒检查未通过：结果已标为不完整');
+      setStatus('已生成，但语义守恒检查未通过：' + message + '。请按上方警告修正后再复制。', true);
+    } else if (assembled.hasUntranslated) {
       showToast('提示词里仍保留未收录中文，建议在英文框里改写');
+      setStatus('已生成，但正面提示词仍保留未收录中文，结果不完整，请先修正。', true);
+    } else if (onlyNegative) {
+      setStatus('已生成负面约束；正面为空，可继续补充想画的主体与场景。', false);
     } else {
       setStatus('已生成正面与负面提示词。复制英文即可粘贴到 SDXL / ComfyUI。', false);
     }
@@ -1340,6 +1515,19 @@
   }
 
   function bindStaticEvents() {
+    if (el.allowCompletion) {
+      el.allowCompletion.checked = state.allowCompletion;
+      el.allowCompletion.addEventListener('change', function () {
+        state.allowCompletion = el.allowCompletion.checked;
+        state.verify = null;
+        setStatus(
+          state.allowCompletion
+            ? '已允许规则补全：只会补光线、镜头、画风这类缺失维度，仍会标明补全项。'
+            : '已关闭规则补全：不会自动补光线、镜头、画风或质量词。',
+          false
+        );
+      });
+    }
     el.fillBtn.addEventListener('click', runFill);
     el.resetBtn.addEventListener('click', clearAll);
     el.generateBtn.addEventListener('click', generate);

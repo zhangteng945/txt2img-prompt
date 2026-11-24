@@ -72,7 +72,22 @@
     const slots = emptySlots();
     const unknown = [];
 
-    (parsed.segments || []).forEach(function (segment) {
+    // 内部以结构化场景为准：六个框只是 scene.units 的投影。Scene 不存在或
+    // 仍是旧调用时，才退回 segments。
+    const units = parsed.scene && (parsed.scene.structured || (parsed.scene.units && parsed.scene.units.length))
+      ? (parsed.scene.units || [])
+      : (parsed.segments || []);
+
+    if (parsed.scene) {
+      Object.defineProperty(slots, '__scene', {
+        value: parsed.scene,
+        enumerable: false,
+        configurable: true,
+        writable: true
+      });
+    }
+
+    units.forEach(function (segment) {
       const key = SLOT_KEYS.indexOf(segment.slot) !== -1 ? segment.slot : 'scene';
       const slot = slots[key];
       const en = U.cleanEnglish(segment.en || '');
@@ -94,8 +109,10 @@
         zh: zh,
         en: en,
         added: false,
-        source: 'idea',
-        category: segment.matches && segment.matches[0] ? segment.matches[0].entry.category : '',
+        source: segment.source || 'scene',
+        category: segment.category || (segment.matches && segment.matches[0] ? segment.matches[0].entry.category : ''),
+        entityId: segment.entityId || '',
+        relation: segment.relation || '',
         unknown: segment.unknown || []
       });
 
@@ -103,6 +120,12 @@
         if (!unknown.includes(u)) unknown.push(u);
       });
     });
+
+    if (parsed.scene && parsed.scene.unknown) {
+      parsed.scene.unknown.forEach(function (item) {
+        if (item && !unknown.includes(item)) unknown.push(item);
+      });
+    }
 
     refreshText(slots);
     return { slots: slots, unknown: unknown };

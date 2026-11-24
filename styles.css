@@ -2144,3 +2144,135 @@ body.modal-open {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* 结构化场景面板：显示对象 / 属性 / 关系 / 否定 / 歧义，不替代六个框。 */
+.completion-toggle {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: #efe2c8;
+  cursor: pointer;
+  user-select: none;
+}
+
+.completion-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #c9a24a;
+}
+
+.completion-toggle span {
+  font-weight: 700;
+}
+
+.completion-toggle small {
+  flex-basis: 100%;
+  padding-left: 24px;
+  color: rgba(239, 226, 200, 0.68);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.scene-panel {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid #d8cbb1;
+  border-radius: 14px;
+  background: #fbf7ee;
+  box-shadow: var(--shadow-sm);
+}
+
+.scene-panel[hidden] {
+  display: none;
+}
+
+.scene-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.scene-panel-head strong {
+  font-size: 14px;
+  color: #3c3427;
+}
+
+.scene-panel-head span {
+  font-size: 12px;
+  color: #85765d;
+}
+
+.scene-group {
+  margin-top: 10px;
+}
+
+.scene-group h4 {
+  margin: 0 0 5px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #85765d;
+}
+
+.scene-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #e1d5bf;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3c3427;
+}
+
+.scene-chip code {
+  color: #8a6c2f;
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.scene-chip.is-negation {
+  border-color: #e4b7a7;
+  background: #fdf1ec;
+}
+
+.scene-chip.is-ambiguous {
+  border-color: #e8cc8f;
+  background: #fdf6e5;
+}
+
+.scene-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #85765d;
+}
+
+.scene-note strong {
+  color: #664d17;
+}
+
+@media (max-width: 640px) {
+  .scene-panel {
+    padding: 12px;
+  }
+
+  .scene-chip {
+    flex-basis: 100%;
+  }
+}

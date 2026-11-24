@@ -18,8 +18,14 @@
     return TR.scanEn(text || '').map(function (m) { return m.entry.category; });
   }
 
-  function complete(slots) {
+  function complete(slots, options) {
     const added = [];
+    // 默认关闭：用户没提光线 / 镜头 / 画风时不再自动补。只有界面显式勾选
+    // 「允许规则补全」并传入 { enabled: true } 才运行。
+    if (!options || options.enabled !== true) {
+      SF.refreshText(slots);
+      return { slots: slots, added: added };
+    }
 
     const lightSlot = slots.light;
     const lightCats = categoriesIn(lightSlot.en);

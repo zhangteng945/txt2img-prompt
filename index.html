@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器，支持词库搜索、收藏、历史、未收录待补录反馈和中英对照预览，输出可直接用于 Lustify Endgame（SDXL）与 ComfyUI 的提示词。">
+  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器：先编结构化场景，再从中英同一棵树投影六个框和最终提示词；支持词库搜索、收藏、历史、未收录待补录反馈，默认不自动补光线镜头。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1340">
+  <link rel="stylesheet" href="styles.css?v=20261124-1406">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -31,7 +31,7 @@
       <div class="hero-copy">
         <p class="eyebrow">中文想法 → SDXL / ComfyUI 英文提示词</p>
         <h1 id="hero-title">把一句想法，<br><em>拆成能生图的提示词。</em></h1>
-        <p class="lede">用词典、规则和模板拆解人物、服装、姿态、场景、光线与画风。六个框都能中英对照修改，算法补上的内容会明确标出。</p>
+        <p class="lede">先编一张结构化场景：主体、服饰、物体、动作与关系各归其位，再从同一棵树生成中英提示词。六个框都能中英对照修改；默认不自动补光线/镜头/画风，补全需手动开启。</p>
       </div>
 
       <div class="idea-card">
@@ -56,10 +56,15 @@
         <div class="hero-actions">
           <button type="button" id="fillBtn" class="button button-primary">
             <span class="button-icon" aria-hidden="true">↳</span>
-            补全并填入各框
+            解析并填入各框
           </button>
           <button type="button" id="resetBtn" class="button button-ghost">清空</button>
         </div>
+        <label class="completion-toggle" for="allowCompletion">
+          <input type="checkbox" id="allowCompletion">
+          <span>允许规则补全（默认关闭）</span>
+          <small>仅在勾选后补光线、镜头、画风；不编造人物、服装、伤势或情绪</small>
+        </label>
         <p id="parseStatus" class="status-line" role="status" aria-live="polite"></p>
       </div>
     </section>
@@ -89,10 +94,12 @@
         <p class="section-note">改中文或英文都可以：能对上词典时自动同步另一侧，对不上的原文会保留。</p>
       </div>
 
+      <div id="scenePanel" class="scene-panel" aria-live="polite" hidden></div>
+
       <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
         <span class="warning-icon" aria-hidden="true">!</span>
         <div class="warning-copy">
-          <strong>有未收录内容</strong>
+          <strong id="warningTitle">有未收录内容</strong>
           <p id="warningText"></p>
           <button type="button" id="warningFeedbackBtn" class="warning-action">查看待补录</button>
         </div>
@@ -270,15 +277,16 @@
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1340"></script>
-  <script src="js/lexicon.js?v=20261124-1340"></script>
-  <script src="js/translator.js?v=20261124-1340"></script>
-  <script src="js/parser.js?v=20261124-1340"></script>
-  <script src="js/slot-fill.js?v=20261124-1340"></script>
-  <script src="js/complete.js?v=20261124-1340"></script>
-  <script src="js/assemble.js?v=20261124-1340"></script>
-  <script src="js/negative.js?v=20261124-1340"></script>
-  <script src="js/feedback.js?v=20261124-1340"></script>
-  <script src="js/app.js?v=20261124-1340"></script>
+  <script src="js/utils.js?v=20261124-1406"></script>
+  <script src="js/lexicon.js?v=20261124-1406"></script>
+  <script src="js/translator.js?v=20261124-1406"></script>
+  <script src="js/scene.js?v=20261124-1406"></script>
+  <script src="js/parser.js?v=20261124-1406"></script>
+  <script src="js/slot-fill.js?v=20261124-1406"></script>
+  <script src="js/complete.js?v=20261124-1406"></script>
+  <script src="js/assemble.js?v=20261124-1406"></script>
+  <script src="js/negative.js?v=20261124-1406"></script>
+  <script src="js/feedback.js?v=20261124-1406"></script>
+  <script src="js/app.js?v=20261124-1406"></script>
 </body>
 </html>

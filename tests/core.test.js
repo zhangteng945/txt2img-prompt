@@ -10,7 +10,7 @@ const assert = require('assert');
 
 global.window = global;
 
-['utils', 'lexicon', 'translator', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback']
+['utils', 'lexicon', 'translator', 'scene', 'parser', 'slot-fill', 'complete', 'assemble', 'negative', 'feedback']
   .forEach(function (name) {
     require(path.join(__dirname, '..', 'js', name + '.js'));
   });
@@ -23,6 +23,7 @@ const Complete = T.Complete;
 const Assemble = T.Assemble;
 const Negative = T.Negative;
 const Feedback = T.Feedback;
+const Scene = T.Scene;
 
 let passed = 0;
 function test(name, fn) {
@@ -36,11 +37,18 @@ function test(name, fn) {
   }
 }
 
-function pipeline(text) {
+function pipeline(text, options) {
+  const opts = options || {};
   const parsed = Parser.parse(text);
   const filled = SF.fill(parsed);
-  const completed = Complete.complete(filled.slots);
-  return { parsed: parsed, slots: completed.slots, added: completed.added };
+  // 补全默认关闭；既有回归里需要补全的用例显式打开。
+  const completed = Complete.complete(filled.slots, { enabled: opts.completion === true });
+  return {
+    parsed: parsed,
+    slots: completed.slots,
+    added: completed.added,
+    quality: opts.quality === true
+  };
 }
 
 test('词典规模落在覆盖率最佳点', function () {
@@ -392,7 +400,7 @@ test('换词回归：换物体、动物、动作、氛围后关键零件仍然�
 
   cases.forEach(function (item) {
     const text = item[0];
-    const result = pipeline(text);
+    const result = pipeline(text, { completion: true });
     assert.deepStrictEqual(result.parsed.unknown, [], text + ' 不应有未命中词');
 
     ['person', 'pose', 'scene', 'light', 'style'].forEach(function (slot) {
@@ -623,8 +631,13 @@ test('英文短词不能切开带连字符的长词', function () {
   assert.ok(/禁烟/.test(antiSmokingAd.zh), 'anti-smoking ad 应反译成禁烟广告');
 });
 
-test('补全只在缺失维度发生并留下记录', function () {
-  const result = pipeline('短发女人站在街边');
+test('补全默认关闭，显式开启后才在缺失维度发生并留下记录', function () {
+  const off = pipeline('短发女人站在街边');
+  assert.strictEqual(off.added.length, 0, '默认不应自动补光线/镜头/画风');
+  assert.strictEqual(off.slots.light.en, '', '默认不应补光线');
+  assert.strictEqual(off.slots.style.en, '', '默认不应补画风');
+
+  const result = pipeline('短发女人站在街边', { completion: true });
   assert.ok(result.added.some(function (x) { return x.en === 'soft natural light'; }));
   assert.ok(result.added.some(function (x) { return x.en === '50mm lens'; }));
   assert.ok(result.added.some(function (x) { return x.en === 'realistic photography'; }));
@@ -634,7 +647,7 @@ test('补全只在缺失维度发生并留下记录', function () {
 });
 
 test('已有光线镜头时不重复补全', function () {
-  const result = pipeline('女人站在街边，柔和自然光，35mm镜头，电影感');
+  const result = pipeline('女人站在街边，柔和自然光，35mm镜头，电影感', { completion: true });
   assert.strictEqual(result.slots.light.en, 'soft natural light, 35mm');
   assert.strictEqual(result.slots.style.en, 'cinematic');
   assert.ok(!result.added.some(function (x) { return x.en === '50mm lens'; }));
@@ -672,7 +685,8 @@ test('组装顺序和用户修改生效', function () {
   assert.ok(assembled.positiveEn.indexOf('black leather jacket') < assembled.positiveEn.indexOf('standing'));
   assert.ok(assembled.positiveEn.indexOf('standing') < assembled.positiveEn.indexOf('street at dusk'));
   assert.ok(assembled.positiveEn.indexOf('street at dusk') < assembled.positiveEn.indexOf('soft natural light'));
-  assert.ok(assembled.positiveEn.indexOf('cinematic') < assembled.positiveEn.indexOf('highly detailed'));
+  const withQuality = Assemble.assemble(result.slots, { quality: true });
+  assert.ok(withQuality.positiveEn.indexOf('cinematic') < withQuality.positiveEn.indexOf('highly detailed'));
 });
 
 test('负面提示词覆盖常见问题并能避让冲突', function () {
@@ -695,7 +709,9 @@ test('复杂服装、材质、发型、光效、镜头和场景都能命中', fu
   const result = pipeline(text);
   assert.deepStrictEqual(result.parsed.unknown, []);
   assert.ok(result.slots.person.en.includes('silver hair'));
-  assert.ok(result.slots.person.en.includes('black silk shirt'));
+  // 结构化投影：人物框只放主体与外貌，服装进服装框。
+  assert.ok(result.slots.outfit.en.includes('black silk shirt'));
+  assert.ok(!result.slots.person.en.includes('black silk shirt'), '服装不应粘在人物框');
   assert.ok(result.slots.scene.en.includes('cafe in the early morning'));
   assert.ok(result.slots.light.en.includes('soft backlight'));
   assert.ok(result.slots.light.en.includes('35mm close-up'));
@@ -871,6 +887,191 @@ test('当前词库已命中的待补录词可标记，备注、删除和本机�
   const loadedButterfly = loaded.find(function (item) { return item.term === '量子蝴蝶'; });
   assert.strictEqual(loadedButterfly.note, '大概是发光的蝴蝶');
   assert.strictEqual(loadedButterfly.count, 1);
+});
+
+
+test('结构化场景：长发女孩穿着白色连衣裙是对象-属性-关系，不是扁平标签', function () {
+  const text = '长发女孩穿着白色连衣裙';
+  const parsed = Parser.parse(text);
+  const scene = parsed.scene;
+  assert.ok(scene && scene.structured, '应编出结构化场景');
+  assert.strictEqual(scene.subjects.length, 1);
+  assert.strictEqual(scene.subjects[0].zh, '女孩');
+  assert.ok(scene.subjects[0].attributes.some(function (a) { return a.zh === '长发'; }), '长发应绑到主体');
+  assert.strictEqual(scene.outfits.length, 1);
+  assert.strictEqual(scene.outfits[0].zh, '白色连衣裙');
+  assert.ok(scene.outfits[0].color && scene.outfits[0].color.en === 'white', '白色应绑到连衣裙');
+  assert.ok(scene.relations.some(function (r) { return r.type === 'wearing'; }), '应保留穿着关系');
+
+  const result = pipeline(text);
+  assert.ok(/girl/i.test(result.slots.person.en));
+  assert.ok(/long hair/i.test(result.slots.person.en));
+  assert.ok(/white dress/i.test(result.slots.outfit.en));
+  assert.ok(!/dress/i.test(result.slots.person.en), '衣服不能粘在人物框');
+  const assembled = Assemble.assemble(result.slots);
+  assert.ok(/a girl with long hair wearing a white dress/i.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(!/[\u3400-\u9fff]/.test(assembled.positiveEn));
+
+  const attributive = pipeline('白色连衣裙的女孩');
+  assert.strictEqual(attributive.slots.person.en, 'a girl');
+  assert.ok(/white dress/i.test(attributive.slots.outfit.en));
+  assert.ok(!/ dress/i.test(attributive.slots.person.en), '定语服装也不能粘在人物框');
+
+  // 颜色 × 服装按「颜色 + 服装」组合，不为每种颜色维护整句词条。
+  ['红色连衣裙', '蓝色连衣裙', '白色连衣裙'].forEach(function (phrase) {
+    const s = Scene.compile(phrase);
+    assert.ok(/dress$/i.test(s.outfits[0].en), phrase + ' 的服装概念应保持 dress：' + s.outfits[0].en);
+    assert.ok(s.outfits[0].color, phrase + ' 应识别颜色');
+  });
+});
+
+test('对象-属性-关系：红衣女孩站在蓝色汽车旁，远处有一座白色房子', function () {
+  const text = '红衣女孩站在蓝色汽车旁，远处有一座白色房子';
+  const parsed = Parser.parse(text);
+  const scene = parsed.scene;
+  assert.strictEqual(scene.subjects.length, 1, '只有女孩是主体');
+  assert.strictEqual(scene.subjects[0].zh, '女孩');
+  assert.strictEqual(scene.subjects[0].outfitColor.en, 'red', '红色应绑到女孩的衣服');
+  assert.strictEqual(scene.objects.length, 2, '汽车和房子是两个物体');
+  const car = scene.objects.find(function (o) { return o.zh === '蓝色汽车'; });
+  const house = scene.objects.find(function (o) { return o.zh === '白色房子'; });
+  assert.ok(car && car.color.en === 'blue', '蓝色应绑到汽车');
+  assert.ok(house && house.color.en === 'white', '白色应绑到房子');
+  assert.strictEqual(house.distance, '远处', '远处是房子的距离属性，不是整张图的拍摄距离');
+  assert.ok(scene.relations.some(function (r) { return r.type === 'next_to'; }), '应保留站在旁边的关系');
+  assert.ok(scene.relations.some(function (r) { return r.type === 'distance' && r.verify === 'in the distance'; }), '应保留远处关系');
+
+  const result = pipeline(text);
+  assert.ok(/red/i.test(result.slots.outfit.en), '衣服色应在服装框');
+  assert.ok(/blue car/i.test(result.slots.scene.en), '车色应在场景框');
+  assert.ok(/white house/i.test(result.slots.scene.en), '房色应在场景框');
+  const assembled = Assemble.assemble(result.slots);
+  assert.ok(/a girl wearing red clothes,? standing next to a blue car/i.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(/a white house in the distance/i.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(!/blue (girl|woman)/i.test(assembled.positiveEn), '蓝色不能错绑到女孩');
+  assert.ok(!/[\u3400-\u9fff]/.test(assembled.positiveEn));
+});
+
+test('否定、并列、转折与作用范围：局部否定不升级成全局 blur', function () {
+  const noText = Scene.compile('不要文字和水印');
+  assert.strictEqual(noText.units.length, 0, '否定项不应进入正面结构');
+  const targets = noText.negations[0].targets.map(function (t) { return t.en; });
+  assert.deepStrictEqual(targets, ['text', 'logo', 'watermark'], '文字应展开为文字/标志，并保留水印');
+  const noTextResult = pipeline('不要文字和水印');
+  const noTextEn = Assemble.assemble(noTextResult.slots).positiveEn;
+  assert.ok(!/watermark|logo|text/i.test(noTextEn), '否定项不能进入正面');
+  const noTextPlan = Scene.negativePlan(noText);
+  const noTextNeg = Negative.build(noTextEn, noTextPlan);
+  assert.ok(/watermark/i.test(noTextNeg.negativeEn));
+  assert.ok(/logo/i.test(noTextNeg.negativeEn));
+  assert.ok(/text/i.test(noTextNeg.negativeEn));
+
+  const contrast = Scene.compile('人物不要模糊，但背景可以虚化');
+  assert.ok(contrast.scopes.some(function (s) { return s.scope === 'subject' && s.polarity === 'exclude'; }), '人物模糊应是局部否定');
+  assert.ok(contrast.scopes.some(function (s) { return s.scope === 'background' && s.polarity === 'allow'; }), '背景虚化应是局部允许');
+  const contrastResult = pipeline('人物不要模糊，但背景可以虚化');
+  const contrastEn = Assemble.assemble(contrastResult.slots).positiveEn;
+  assert.ok(/blurred background/i.test(contrastEn), '背景虚化应保留在正面');
+  const plan = Scene.negativePlan(contrast);
+  assert.ok(plan.suppress.indexOf('模糊') !== -1, '全局模糊负面词应被抑制');
+  const neg = Negative.build(contrastEn, plan);
+  assert.ok(/blurry person/i.test(neg.negativeEn), '人物模糊应作为局部负面项');
+  assert.ok(neg.suppressed.some(function (e) { return e.zh === '模糊'; }));
+  assert.ok(!/(^|,\s*)模糊(,|$)/.test(neg.negativeEn), '不能生成全局模糊负面词');
+
+  const scope = Scene.compile('除了眼睛，其他部分都使用低饱和色彩');
+  const styleUnit = scope.units.find(function (u) { return u.slot === 'style'; });
+  assert.ok(styleUnit && /muted colors except the eyes/i.test(styleUnit.en), '低饱和应有作用范围和例外');
+  assert.ok(scope.scopes.some(function (s) { return s.exception === '眼睛'; }), '应记录眼睛例外');
+  const scopePlan = Scene.negativePlan(scope);
+  assert.ok(scopePlan.extra.some(function (x) { return /desaturated eyes/i.test(x.en); }), '例外应进入负面保护');
+});
+
+test('肢体动作：女人张开五指拆成主体 + 手部动作，不残留中文或 pointing forward', function () {
+  const text = '女人张开五指';
+  const result = pipeline(text);
+  assert.strictEqual(result.slots.person.en, 'a woman');
+  assert.strictEqual(result.slots.pose.en, 'spreading five fingers');
+  assert.ok(!/pointing forward/i.test(result.slots.pose.en), '不能变成 pointing forward');
+  assert.ok(!/[\u3400-\u9fff]/.test(result.slots.pose.en), '不能残留「张开五」');
+  const assembled = Assemble.assemble(result.slots);
+  assert.ok(/a woman spreading five fingers/i.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(!/pointing forward|[\u3400-\u9fff]/i.test(assembled.positiveEn));
+
+  // 通用身体部位 + 肢体动作规则，不是只给这一句写模板。
+  const raised = pipeline('女孩举起右手');
+  assert.strictEqual(raised.slots.person.en, 'a girl');
+  assert.ok(/raising right hand/i.test(raised.slots.pose.en));
+  assert.ok(!/\u4e3e\u8d77|\u53f3\u624b/.test(raised.slots.pose.en));
+});
+
+test('动作与地点分框，英文从同一结构自然生成', function () {
+  const result = pipeline('女孩穿着白色连衣裙站在樱花树下');
+  assert.strictEqual(result.slots.person.en, 'a girl');
+  assert.ok(/white dress/i.test(result.slots.outfit.en));
+  assert.strictEqual(result.slots.pose.en, 'standing');
+  assert.ok(/cherry blossom tree/i.test(result.slots.scene.en));
+  const assembled = Assemble.assemble(result.slots);
+  assert.ok(/a girl wearing a white dress,? standing under a cherry blossom tree/i.test(assembled.positiveEn), assembled.positiveEn);
+
+  const beach = pipeline('走在沙滩上');
+  assert.strictEqual(beach.slots.pose.en, 'walking');
+  assert.strictEqual(beach.slots.scene.en, 'on the beach');
+  assert.strictEqual(Assemble.assemble(beach.slots).positiveEn, 'walking on the beach');
+});
+
+test('多候选切分保留歧义，不在长词上直接拍板', function () {
+  const scene = Scene.compile('白色连衣裙');
+  assert.ok(scene.segmentation.tokens.length >= 2, '应切成颜色 + 服装');
+  assert.strictEqual(scene.segmentation.tokens[0].entry.category, 'color');
+  assert.strictEqual(scene.segmentation.tokens[1].entry.category, 'outfit');
+  assert.ok(scene.segmentation.ambiguous, '整词与颜色+服装两种解释应保留');
+  assert.ok(scene.segmentation.alternativesText.some(function (text) { return /白色连衣裙/.test(text); }),
+    '应保留整词备选，不假装只有一种切分');
+  assert.ok(scene.ambiguities.length > 0);
+});
+
+test('语义守恒检查：否定变肯定、未翻译残留和擅自补光都会阻止完整', function () {
+  const scene = Scene.compile('不要帽子');
+  const filled = SF.fill(Parser.parse('不要帽子'));
+  const assembled = Assemble.assemble(filled.slots);
+  assert.strictEqual(assembled.positiveEn, '', '否定-only 不应生成正面帽子');
+  const plan = Scene.negativePlan(scene);
+  const neg = Negative.build(assembled.positiveEn, plan);
+  assert.ok(/hat/i.test(neg.negativeEn), '帽子应进入负面');
+  const ok = Scene.verify(scene, filled.slots, assembled, neg);
+  assert.ok(ok.ok && !ok.incomplete, '无帽子正面时应通过');
+
+  const bad = Scene.verify(scene, filled.slots, { positiveEn: 'a woman wearing a hat' }, neg);
+  assert.ok(!bad.ok, '正面出现 wearing a hat 必须阻止并标为不完整');
+  assert.ok(bad.issues.some(function (i) { return i.code === 'NEGATION_LEAK'; }));
+
+  const unknownScene = Parser.parse('一个女孩站在街边，背后有闪烁的量子蝴蝶').scene;
+  const unknownResult = pipeline('一个女孩站在街边，背后有闪烁的量子蝴蝶');
+  const unknownAssembled = Assemble.assemble(unknownResult.slots);
+  const unknownVerify = Scene.verify(unknownScene, unknownResult.slots, unknownAssembled, null);
+  assert.ok(unknownVerify.incomplete, '未识别内容应标为不完整');
+  assert.ok(unknownVerify.issues.some(function (i) { return i.code === 'UNTRANSLATED_CONTENT'; }));
+
+  const extraScene = Scene.compile('女人站在街边');
+  const extra = Scene.verify(extraScene, {}, { positiveEn: 'a woman standing on the street, soft natural light, 50mm lens' }, null);
+  assert.ok(!extra.ok, '用户没提光线镜头，自动补全必须被拦下');
+  assert.ok(extra.issues.some(function (i) { return i.code === 'EXTRA_LIGHTING'; }));
+
+  const boundScene = Scene.compile('红衣女孩站在蓝色汽车旁，远处有一座白色房子');
+  const swapped = Scene.verify(boundScene, {}, {
+    positiveEn: 'a girl wearing blue clothes, standing next to a red car, a white house in the distance'
+  }, null);
+  assert.ok(!swapped.ok, '颜色错绑必须被拦下');
+  assert.ok(swapped.issues.some(function (i) {
+    return i.code === 'COLOR_BINDING' || i.code === 'COLOR_MISBIND';
+  }));
+
+  const extraSubject = Scene.verify(extraScene, {}, {
+    positiveEn: 'a woman standing on the street, a girl standing nearby'
+  }, null);
+  assert.ok(extraSubject.issues.some(function (i) { return i.code === 'EXTRA_SUBJECT'; }),
+    '原文只有女人时，英文多出 girl 应被标出');
 });
 
 console.log('\n' + passed + ' tests passed.');

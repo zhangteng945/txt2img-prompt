@@ -56,7 +56,7 @@
   // 简单动作（walking / sitting / standing）紧跟在人物后面时不加逗号：
   // a girl walking on the beach 比 a girl, walking, on the beach 自然。
   function looksLikeBarePose(phrase) {
-    return /^[a-z]+ing$/i.test(phrase);
+    return /^[a-z]+ing\b/i.test(phrase);
   }
 
   // 关系句拆框后，场景框里是方位短语（on the beach / in front of the window）。
@@ -79,7 +79,8 @@
     });
   }
 
-  function assemble(slots) {
+  function assemble(slots, options) {
+    const addQuality = !!(options && options.quality === true);
     const phrases = [];
     const zhSections = [];
     const seen = Object.create(null);
@@ -95,9 +96,22 @@
         if (seen[k] || alreadyCovered(phrase, allText)) return;
         seen[k] = true;
 
-        if (def.key === 'pose' && lastPhraseSlot === 'person' &&
-            (looksLikeRelationAction(phrase) || looksLikeBarePose(phrase))) {
+        // 服装框里的 wearing / in / dressed in 是关系短语，紧贴人物更自然：
+        // a girl wearing a white dress。
+        if (def.key === 'outfit' && lastPhraseSlot === 'person' &&
+            /^(wearing|in |dressed in|with )/i.test(phrase)) {
           phrases[phrases.length - 1] += ' ' + phrase;
+          allText = phrases.join(', ');
+          lastPhraseSlot = 'outfit';
+          changed = true;
+          return;
+        }
+
+        if (def.key === 'pose' && (lastPhraseSlot === 'person' || lastPhraseSlot === 'outfit') &&
+            (looksLikeRelationAction(phrase) || looksLikeBarePose(phrase))) {
+          // 人物 + 动作直接相连；人物 + 服装后再接动作时用逗号，
+          // 更接近 a girl wearing a white dress, standing under a tree。
+          phrases[phrases.length - 1] += (lastPhraseSlot === 'outfit' ? ', ' : ' ') + phrase;
           allText = phrases.join(', ');
           lastPhraseSlot = 'pose';
           changed = true;
@@ -141,7 +155,7 @@
       !/(woman|man|girl|boy|person|child|model|knight|elf|princess|prince|witch|mage|warrior|dancer|student|detective|cowboy|pirate|ninja|nun|maid|butler)/i.test(personText);
     const quality = selectQuality(styleSlot.en || '', allText, !!personText.trim() && !animalOnly);
 
-    if (quality.length) {
+    if (addQuality && quality.length) {
       quality.forEach(function (term) {
         phrases.push(term);
         allText += (allText ? ', ' : '') + term;

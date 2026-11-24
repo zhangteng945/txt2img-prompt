@@ -911,6 +911,10 @@
     if (prep === 'between') {
       return 'between ' + (isObject ? pluralizeNoun(text) : text);
     }
+    // by the seaside / by the riverside 比 by a seaside 自然。
+    if (prep === 'by' && /^(seaside|lakeside|riverside|waterfront|harbor|harbour|coast|shore)$/i.test(text)) {
+      return prep + ' the ' + text;
+    }
     if (isObject) {
       // 窗/墙是画面里默认被指认的那一个：standing in front of the window。
       if (/^(window|wall)$/i.test(text)) return prep + ' the ' + text;
@@ -1666,6 +1670,10 @@
     translateZhPhrase: translateZhPhrase,
     translateEnPhrase: translateEnPhrase,
     decomposeRelation: decomposeRelation,
+    withIndefiniteArticle: withIndefiniteArticle,
+    locativePhrase: locativePhrase,
+    placePrep: placePrep,
+    isAliasAllowed: shortAliasAllowed,
     hasCjk: U.hasCjk,
     stopZh: STOP_ZH,
     stopEn: EN_STOP

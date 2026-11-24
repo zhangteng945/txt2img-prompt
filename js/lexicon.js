@@ -17,6 +17,7 @@
     eyes: 'person',
     expression: 'person',
     makeup: 'person',
+    body: 'pose',
     outfit: 'outfit',
     accessory: 'outfit',
     material: 'outfit',
@@ -46,6 +47,7 @@
     eyes: '眼睛',
     expression: '表情神态',
     makeup: '妆容',
+    body: '身体部位',
     outfit: '服装',
     accessory: '配饰',
     material: '材质',
@@ -3342,7 +3344,7 @@
       "油菜花田|rapeseed flower field|油菜花海|canola field",
       "麦田|wheat field|金色麦田|wheat fields",
       "薰衣草山谷|lavender valley|薰衣草谷|lavender vale",
-      "樱花树下|under the cherry tree||beneath cherry blossoms",
+      "樱花树下|under a cherry blossom tree||beneath cherry blossoms",
       "枫树下|under the maple tree||under maple tree",
       "古树下|under an old tree|大树下|beneath a large tree",
       "树屋|treehouse|树上小屋|tree house",
@@ -5768,7 +5770,7 @@
     "柳树|willow tree|柳树|willow trees",
     "枫树|maple tree|枫树|maple trees",
     "橡树|oak tree|橡树|oak trees",
-    "樱花树|cherry tree|樱花树|cherry trees",
+    "樱花树|cherry blossom tree|樱花树|cherry trees",
     "桃树|peach tree|桃树|peach trees",
     "椰子树|coconut tree|椰树|coconut trees",
     "菊花|chrysanthemum|菊花|chrysanthemums",
@@ -8744,6 +8746,65 @@ const BROADEN_GROUPS = {
     BROADEN_GROUPS[category].forEach(function (row) { row.broadened = true; });
   });
 
+  // ── 结构化场景编译需要的通用零件 ─────────────────────────────
+  // 这些不是为某一条示例写的整句模板，而是「主体 / 衣物 / 物体 / 背景 /
+  // 身体部位 / 肢体动作」这类可被对象-属性-关系复用的底层概念。
+  const SCENE_COMPILER_GROUPS = {
+    subject: [
+      ['人物', 'person', ['人物角色', '角色'], ['figure', 'people']]
+    ],
+    eyes: [
+      ['眼睛', 'eyes', ['双眼', '眼眸'], ['eye']]
+    ],
+    outfit: [
+      ['衣服', 'clothes', ['服装', '衣物', '衣裳'], ['clothing', 'garment']]
+    ],
+    scene: [
+      ['背景', 'background', ['背景环境', '后景'], ['backdrop']]
+    ],
+    object: [
+      ['房子', 'house', ['房屋', '住宅', '屋子'], ['home', 'building']]
+    ],
+    body: [
+      ['手', 'hand', ['手掌'], ['hands']],
+      ['手指', 'fingers', ['指头'], ['finger']],
+      ['五指', 'five fingers', ['五根手指'], ['all five fingers']],
+      ['右手', 'right hand', [], ['right hands']],
+      ['左手', 'left hand', [], ['left hands']],
+      ['双手', 'both hands', ['两只手'], ['both arms']],
+      ['手臂', 'arm', ['胳膊'], ['arms']],
+      ['双臂', 'both arms', ['两条手臂'], ['both arms']],
+      ['拳头', 'fist', ['拳'], ['fists']],
+      ['腿', 'leg', ['双腿', '两条腿'], ['legs']],
+      ['膝盖', 'knee', ['双膝'], ['knees']],
+      ['腰', 'waist', ['腰部'], ['waists']],
+      ['头', 'head', [], ['heads']],
+      ['肩膀', 'shoulder', ['肩', '双肩'], ['shoulders']],
+      ['背部', 'back', ['后背'], ['backs']],
+      ['脚', 'foot', ['双脚', '脚掌'], ['feet']],
+      ['脚尖', 'tiptoe', ['脚趾尖'], ['tips of the toes']],
+      ['嘴', 'mouth', ['嘴巴'], ['mouths']],
+      ['头发', 'hair', ['发丝'], ['hairs']]
+    ],
+    action: [
+      ['张开五指', 'spreading five fingers',
+        ['张开手指', '五指张开', '伸开五指', '摊开五指', '张开手掌', '伸开手掌'],
+        ['opening five fingers', 'spreading the fingers', 'open hand with five fingers spread']],
+      ['举起右手', 'raising right hand', ['抬起右手', '举起手'], ['raising a right hand']],
+      ['举起左手', 'raising left hand', ['抬起左手'], ['raising a left hand']],
+      ['抬起左腿', 'raising left leg', ['抬起左脚'], ['lifting left leg']],
+      ['抬起右腿', 'raising right leg', ['抬起右脚'], ['lifting right leg']],
+      ['张开双臂', 'opening both arms', ['展开双臂', '张开双手'], ['spreading both arms']],
+      ['抱着膝盖', 'hugging knees', ['抱住膝盖', '抱膝'], ['hugging both knees']],
+      ['捂着嘴', 'covering mouth', ['捂住嘴', '掩嘴'], ['covering the mouth']],
+      ['弯下腰', 'bending over', ['弯腰', '俯身'], ['bending down']],
+      ['点点头', 'nodding', ['点头', '颔首'], ['nodding the head']],
+      ['摇摇头', 'shaking head', ['摇头'], ['shaking the head']],
+      ['竖起大拇指', 'thumbs up', ['点赞', '竖大拇指'], ['giving a thumbs up']],
+      ['拄着拐杖', 'leaning on a cane', ['拄拐杖', '拄拐', '扶着拐杖'], ['walking with a cane']]
+    ]
+  };
+
   // 合并基础词条、第二轮人工扩充词条、覆盖率补充词条与本轮日常零件。
   const ALL_GROUPS = Object.assign({}, GROUPS);
   Object.keys(EXTRA_GROUPS).forEach(function (category) {
@@ -8758,6 +8819,9 @@ const BROADEN_GROUPS = {
   Object.keys(BROADEN_GROUPS).forEach(function (category) {
     if (category === 'object') return;
     ALL_GROUPS[category] = (ALL_GROUPS[category] || []).concat(BROADEN_GROUPS[category]);
+  });
+  Object.keys(SCENE_COMPILER_GROUPS).forEach(function (category) {
+    ALL_GROUPS[category] = (ALL_GROUPS[category] || []).concat(SCENE_COMPILER_GROUPS[category]);
   });
 
   // 物体词库放在最后合并，避免打乱既有条目的 id 与人工/生成统计。

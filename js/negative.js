@@ -45,14 +45,25 @@
     if (!byZh[entry.zh]) byZh[entry.zh] = entry;
   });
 
-  function build(positiveEn) {
+  function build(positiveEn, options) {
     const positive = String(positiveEn || '');
     const items = [];
     const skipped = [];
+    const suppressed = [];
+    let opts = options || {};
+    // 也接受直接传 scene：内部转成负面计划，调用方不用自己记 API。
+    if (opts && opts.negations && !opts.extra && T2I.Scene && T2I.Scene.negativePlan) {
+      opts = T2I.Scene.negativePlan(opts);
+    }
+    const suppress = opts.suppress || [];
 
     ORDER.forEach(function (zh) {
       const entry = byZh[zh];
       if (!entry) return;
+      if (suppress.indexOf(zh) !== -1) {
+        suppressed.push(entry);
+        return;
+      }
       const rule = CONFLICT_RULES[zh];
       if (rule && rule.test(positive)) {
         skipped.push(entry);
@@ -61,6 +72,16 @@
       items.push(entry);
     });
 
+    const extraItems = [];
+    (opts.extra || []).forEach(function (item) {
+      if (!item || !item.en) return;
+      const key = String(item.en).toLowerCase();
+      if (items.some(function (e) { return String(e.en).toLowerCase() === key; })) return;
+      if (extraItems.some(function (e) { return String(e.en).toLowerCase() === key; })) return;
+      extraItems.push({ zh: item.zh || item.en, en: item.en, reason: item.reason || '语义场景约束' });
+    });
+    extraItems.forEach(function (item) { items.push(item); });
+
     const negativeEn = items.map(function (e) { return e.en; }).join(', ');
     const negativeZh = items.map(function (e) { return e.zh; }).join('，');
 
@@ -68,7 +89,9 @@
       negativeEn: negativeEn,
       negativeZh: negativeZh,
       items: items,
-      skipped: skipped
+      skipped: skipped,
+      suppressed: suppressed,
+      extraItems: extraItems
     };
   }
 

@@ -377,11 +377,24 @@
       });
     });
 
+    // 语义结构才是最终目标：分词、分类都只是中间步骤。Scene 编译失败或
+    // 没有把握时会回落到上面的 segments，原文不会被丢掉。
+    const scene = T2I.Scene ? T2I.Scene.compile(raw, {
+      segments: segments,
+      chunks: chunks
+    }) : null;
+    if (scene && scene.unknown) {
+      scene.unknown.forEach(function (item) {
+        if (item && !unknown.includes(item)) unknown.push(item);
+      });
+    }
+
     return {
       raw: raw,
       chunks: chunks,
       segments: segments,
-      unknown: unknown
+      unknown: unknown,
+      scene: scene
     };
   }
 

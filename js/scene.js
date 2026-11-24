@@ -2141,6 +2141,585 @@
     };
   }
 
+  // ── 本地模型结果的场景接入 ──────────────────────────────────
+  // 本地模型只负责「哪些原文片段 + 什么槽位 / 角色 / 结构关系」；英文仍由
+  // 本文件的词典与结构模板生成，不另做一套拼英文逻辑。模型返回的 text
+  // 必须是原文子串，local-llm.js 会先逐段校验，这里再做一次防御性解析。
+
+  function specSpan(text, slot) {
+    const source = cleanText(text);
+    if (!source) return { zh: '', en: '', matches: [], unknown: [] };
+    const result = TR.translateZhPhrase(source, { slot: slot, allowRelation: true });
+    return {
+      zh: U.cleanChinese(result.zh || source),
+      en: U.cleanEnglish(result.en || ''),
+      matches: result.matches || [],
+      unknown: (result.unknown || []).slice(),
+      relation: result.relation || null
+    };
+  }
+
+  function specColor(text) {
+    const source = cleanText(text);
+    if (!source) return null;
+    const span = specSpan(source, 'outfit');
+    return {
+      zh: span.zh || source,
+      en: span.en || source,
+      alias: source,
+      category: 'color'
+    };
+  }
+
+  function specCategory(span, parsed) {
+    if (span && span.matches && span.matches[0] && span.matches[0].entry) {
+      return span.matches[0].entry.category || '';
+    }
+    if (parsed && parsed.matches && parsed.matches[0] && parsed.matches[0].entry) {
+      return parsed.matches[0].entry.category || '';
+    }
+    return '';
+  }
+
+  function specUnitFromText(text, slot, role) {
+    const source = cleanText(text);
+    if (!source) return null;
+    const key = SLOTS.indexOf(slot) !== -1 ? slot : 'scene';
+    let parsed = null;
+    if (key === 'person') parsed = parseSubjectPhrase(source);
+    else if (key === 'outfit') parsed = parseOutfitPhrase(source);
+    else if (key === 'scene' && role === 'object') parsed = parseObjectPhrase(source);
+
+    const span = specSpan(source, key);
+    let en = parsed && parsed.en ? parsed.en : span.en;
+    let zh = hasCjk(source) ? source : (parsed && parsed.zh ? parsed.zh : (span.zh || source));
+
+    if (!en && !hasCjk(source)) en = U.cleanEnglish(source);
+    if (en && key === 'person' && !/^(a|an|the)\b/i.test(en)) en = addArticle(en);
+    if (en && key === 'outfit' && !/^(wearing|in |dressed in)\b/i.test(en)) {
+      en = 'wearing ' + addArticle(en);
+    }
+    if (en && key === 'scene' && role === 'object' &&
+        !hasCjk(en) && !/^(a|an|the)\b/i.test(en) &&
+        !/^(in|on|at|under|over|by|near|behind|beside|next to|in front of|inside|outside|along|through|from|toward|towards|against|across)\b/i.test(en)) {
+      en = addArticle(en);
+    }
+
+    return makeUnit(key, zh, en, source, specCategory(span, parsed), {
+      source: 'local-llm',
+      role: role || '',
+      matches: span.matches || [],
+      unknown: span.unknown || []
+    });
+  }
+
+  function specSubject(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const parsed = parseSubjectPhrase(text);
+    const span = specSpan(text, 'person');
+    let en = parsed && parsed.en ? parsed.en : addArticle(span.en || text);
+    const attributes = [];
+    const seen = Object.create(null);
+    function addAttr(zh, enValue) {
+      const zhText = cleanText(zh);
+      const enText = U.cleanEnglish(enValue || '');
+      if (!zhText && !enText) return;
+      const key = (zhText + '|' + enText).toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      attributes.push({ zh: zhText || enText, en: enText || zhText, kind: 'spec' });
+    }
+    ((parsed && parsed.attributes) || []).forEach(function (attr) { addAttr(attr.zh, attr.en); });
+    (Array.isArray(item.attributes) ? item.attributes : []).forEach(function (attrText) {
+      const attr = specSpan(attrText, 'person');
+      const already = attributes.some(function (a) { return a.zh === cleanText(attrText); });
+      addAttr(attr.zh || attrText, attr.en || attrText);
+      if (!already && attr.en && en.indexOf(attr.en) === -1) en += ' with ' + attr.en;
+    });
+    return {
+      id: nextId('s'),
+      zh: parsed ? parsed.zh : text,
+      en: en,
+      category: 'subject',
+      attributes: attributes,
+      outfitColor: null,
+      outfitColorText: item.outfit_color ? cleanText(item.outfit_color) : '',
+      text: text
+    };
+  }
+
+  function specOutfit(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const parsed = parseOutfitPhrase(text);
+    const span = specSpan(text, 'outfit');
+    const color = item.color ? specColor(item.color) : (parsed && parsed.color ? parsed.color : null);
+    let en = parsed && parsed.en ? parsed.en : span.en;
+    if (!en) en = text;
+    if (color && color.en && !new RegExp('^' + escapeRegExp(color.en), 'i').test(en)) {
+      en = color.en + ' ' + en;
+    }
+    return {
+      id: nextId('c'),
+      ownerId: '',
+      ownerText: item.owner ? cleanText(item.owner) : '',
+      zh: parsed ? parsed.zh : text,
+      en: en,
+      color: color,
+      attributes: (parsed && parsed.attributes) || [],
+      text: text
+    };
+  }
+
+  function specObject(item) {
+    if (!item || typeof item.text !== 'string') return null;
+    const text = cleanText(item.text);
+    if (!text) return null;
+    const parsed = parseObjectPhrase(text);
+    const span = specSpan(text, 'scene');
+    const color = item.color ? specColor(item.color) : (parsed && parsed.color ? parsed.color : null);
+    let en = parsed && parsed.en ? parsed.en : span.en;
+    if (!en) en = text;
+    if (color && color.en && !new RegExp('^' + escapeRegExp(color.en), 'i').test(en)) {
+      en = color.en + ' ' + en;
+    }
+    return {
+      id: nextId('o'),
+      zh: parsed ? parsed.zh : text,
+      en: en,
+      category: (parsed && parsed.category) || specCategory(span, parsed) || 'object',
+      color: color,
+      distance: cleanText(item.distance || (parsed && parsed.distance) || ''),
+      attributes: [],
+      text: text
+    };
+  }
+
+  function textOverlaps(a, b) {
+    const left = cleanText(a);
+    const right = cleanText(b);
+    if (!left || !right) return false;
+    return left === right || left.indexOf(right) !== -1 || right.indexOf(left) !== -1;
+  }
+
+  function normalizeSpecScope(value) {
+    const text = cleanText(value);
+    if (/^(all|everything|整体|全部|所有)$/i.test(text)) return 'all';
+    if (/background|背景|环境|后景|远景/i.test(text)) return 'background';
+    if (/subject|人物|主体|人脸|面部|身体|衣服|服装|手部|头发|眼睛|角色|她|他/.test(text)) return 'subject';
+    return 'global';
+  }
+
+  function normalizeSpecTarget(value) {
+    let text = cleanText(value);
+    const stripped = text
+      .replace(/^(人物|主体|人脸|面部|背景|环境|衣服|服装|身体|手部|头发|眼睛|画面里|画面|整张图)?(?:都|也|全部)?(?:不要|不想|别|避免|不能|不可|请勿|切勿|勿|没有|不含|去除|去掉|排除)/, '')
+      .replace(/^(出现|任何|所有|带有|有|的)+/g, '')
+      .trim();
+    return stripped || text;
+  }
+
+  function fromSpec(spec, raw) {
+    const source = U.normalizeSpace(raw);
+    const scene = emptyScene(source);
+    scene.structured = true;
+    scene.origin = 'local-llm';
+    scene.specNotes = Array.isArray(spec && spec.notes) ? spec.notes.slice(0, 20).map(String) : [];
+    const data = spec || {};
+
+    // 关系句先让既有规则编译器拆一次（如「站在蓝色汽车旁」→ standing + next to a blue car），
+    // 模型已给出关系和物体时，用它替换整句姿态翻译，避免颜色和介词绑错。
+    const relationParses = Object.create(null);
+    (Array.isArray(data.relations) ? data.relations : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const text = cleanText(item.text || '');
+      if (!text || relationParses[text]) return;
+      try {
+        relationParses[text] = compile(text);
+      } catch (err) {
+        relationParses[text] = null;
+      }
+    });
+    idCounter = 0;
+
+    // 1. 六个框的投影单元：原文片段 + 槽位。
+    const unitSeen = Object.create(null);
+    function addUnit(unit) {
+      if (!unit) return;
+      const key = unit.slot + '|' + (unit.en || '').toLowerCase() + '|' + (unit.text || '');
+      if (unitSeen[key]) return;
+      unitSeen[key] = true;
+      scene.units.push(unit);
+    }
+    function relationParseFor(text) {
+      const relations = Array.isArray(data.relations) ? data.relations : [];
+      for (let i = 0; i < relations.length; i += 1) {
+        const item = relations[i];
+        if (!item || typeof item !== 'object') continue;
+        const relationText = cleanText(item.text || '');
+        if (relationText !== text) continue;
+        const parsed = relationParses[relationText];
+        if (!parsed || !(parsed.units || []).length) continue;
+        const structural = parsed.units.filter(function (unit) {
+          return unit.slot === 'pose' || unit.slot === 'scene';
+        });
+        if (!structural.length) continue;
+        // 关系句拆分后不能吞掉主语等前缀：没被动作/方位覆盖的实义字，
+        // 必须能对上模型显式给出的主体 / 服装 / 物体，否则不替换。
+        const covered = new Array(text.length);
+        structural.forEach(function (unit) {
+          const part = unit.text || '';
+          let index = part ? text.indexOf(part) : -1;
+          while (index !== -1) {
+            for (let k = index; k < index + part.length; k += 1) covered[k] = true;
+            index = text.indexOf(part, index + 1);
+          }
+        });
+        let leftover = '';
+        for (let k = 0; k < text.length; k += 1) {
+          if (!covered[k]) leftover += text[k];
+        }
+        leftover = leftover.replace(/[的了着过和与及或而并也都就还很更最把被给让使对为以于地得在是有可所其之此那这我你他她它们个位名件条双只张座片群套头身款种些点分一二两三几每各另穿戴着系围披除部分使用剩余外，,。.、；;：:]/g, '').trim();
+        if (leftover) {
+          const explicit = (Array.isArray(data.subjects) ? data.subjects : [])
+            .concat(Array.isArray(data.outfits) ? data.outfits : [])
+            .concat(Array.isArray(data.objects) ? data.objects : []);
+          const matched = explicit.some(function (entity) {
+            return entity && typeof entity.text === 'string' && textOverlaps(entity.text, leftover);
+          });
+          if (!matched) continue;
+        }
+        return { parsed: parsed, item: item, structural: structural };
+      }
+      return null;
+    }
+
+    (Array.isArray(data.units) ? data.units : []).forEach(function (item) {
+      if (!item || typeof item.text !== 'string') return;
+      const text = cleanText(item.text);
+      if (!text) return;
+      const slot = SLOTS.indexOf(item.slot) !== -1 ? item.slot : 'scene';
+      const role = typeof item.role === 'string' ? item.role : '';
+
+      // 姿态单元如果正好是模型给出的关系句，用规则编译器的拆分结果，
+      // 保留「动作 + 方位」两段，颜色绑定和 verify 都更稳。
+      if (slot === 'pose') {
+        const found = relationParseFor(text);
+        if (found) {
+          found.structural.forEach(function (parsedUnit) {
+            addUnit(makeUnit(
+              parsedUnit.slot,
+              parsedUnit.zh,
+              parsedUnit.en,
+              parsedUnit.text,
+              parsedUnit.category,
+              {
+                source: 'local-llm',
+                role: parsedUnit.slot === 'pose' ? 'action' : 'place',
+                matches: parsedUnit.matches || [],
+                unknown: parsedUnit.unknown || []
+              }
+            ));
+          });
+          return;
+        }
+      }
+
+      addUnit(specUnitFromText(text, slot, role));
+    });
+
+    // 2. 模型显式给出的主体 / 服装 / 物体。
+    (Array.isArray(data.subjects) ? data.subjects : []).forEach(function (item) {
+      const subject = specSubject(item);
+      if (!subject) return;
+      if (scene.subjects.some(function (s) { return textOverlaps(s.text || s.zh, subject.text); })) return;
+      scene.subjects.push(subject);
+    });
+    (Array.isArray(data.outfits) ? data.outfits : []).forEach(function (item) {
+      const outfit = specOutfit(item);
+      if (!outfit) return;
+      if (scene.outfits.some(function (o) { return textOverlaps(o.text || o.zh, outfit.text); })) return;
+      scene.outfits.push(outfit);
+    });
+    (Array.isArray(data.objects) ? data.objects : []).forEach(function (item) {
+      const object = specObject(item);
+      if (!object) return;
+      if (scene.objects.some(function (o) { return textOverlaps(o.text || o.zh, object.text); })) return;
+      scene.objects.push(object);
+    });
+
+    // 3. 把单元和实体连起来；模型漏写实体数组时从单元推断，保证六框不空。
+    scene.subjects.forEach(function (subject) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'person' && textOverlaps(u.text, subject.text || subject.zh);
+      });
+      if (unit) {
+        unit.entityId = subject.id;
+        if (!unit.en || hasCjk(unit.en)) unit.en = subject.en;
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, subject.text || subject.zh); })) {
+        scene.units.push(makeUnit('person', subject.zh, subject.en, subject.text || subject.zh, 'subject', {
+          source: 'local-llm', role: 'subject', entityId: subject.id
+        }));
+      }
+    });
+    scene.outfits.forEach(function (outfit) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'outfit' && textOverlaps(u.text, outfit.text || outfit.zh);
+      });
+      if (unit) {
+        unit.entityId = outfit.id;
+        if (!unit.en || hasCjk(unit.en)) {
+          unit.en = /^(wearing|in |dressed in)\b/i.test(outfit.en) ? outfit.en : 'wearing ' + addArticle(outfit.en);
+        }
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, outfit.text || outfit.zh); })) {
+        scene.units.push(makeUnit('outfit', outfit.zh, 'wearing ' + addArticle(outfit.en), outfit.text || outfit.zh, 'outfit', {
+          source: 'local-llm', role: 'outfit', entityId: outfit.id
+        }));
+      }
+    });
+    scene.objects.forEach(function (object) {
+      const unit = scene.units.find(function (u) {
+        return u.slot === 'scene' && u.role === 'object' && textOverlaps(u.text, object.text || object.zh);
+      });
+      if (unit) {
+        unit.entityId = object.id;
+        if (!unit.en || hasCjk(unit.en)) unit.en = addArticle(object.en);
+      } else if (!scene.units.some(function (u) { return textOverlaps(u.text, object.text || object.zh); })) {
+        scene.units.push(makeUnit('scene', object.zh, addArticle(object.en), object.text || object.zh, object.category || 'object', {
+          source: 'local-llm', role: 'object', entityId: object.id
+        }));
+      }
+    });
+
+    // 单元没写实体时也补出主体 / 服装 / 物体，结构化面板才有东西可看。
+    scene.units.forEach(function (unit) {
+      if (unit.slot === 'person' && !scene.subjects.some(function (s) { return textOverlaps(unit.text, s.text || s.zh); })) {
+        const subject = specSubject({ text: unit.text });
+        if (subject) {
+          subject.en = unit.en || subject.en;
+          subject.zh = unit.zh || subject.zh;
+          scene.subjects.push(subject);
+          unit.entityId = subject.id;
+        }
+      }
+      if (unit.slot === 'outfit' && !scene.outfits.some(function (o) { return textOverlaps(unit.text, o.text || o.zh); })) {
+        const outfit = specOutfit({ text: unit.text });
+        if (outfit) {
+          outfit.en = unit.en || outfit.en;
+          outfit.zh = unit.zh || outfit.zh;
+          scene.outfits.push(outfit);
+          unit.entityId = outfit.id;
+        }
+      }
+      if (unit.slot === 'scene' && unit.role === 'object' &&
+          !scene.objects.some(function (o) { return textOverlaps(unit.text, o.text || o.zh); })) {
+        const object = specObject({ text: unit.text });
+        if (object) {
+          object.en = unit.en || object.en;
+          object.zh = unit.zh || object.zh;
+          scene.objects.push(object);
+          unit.entityId = object.id;
+        }
+      }
+    });
+
+    // 4. 服装归属与主体衣服颜色。
+    scene.outfits.forEach(function (outfit) {
+      let owner = null;
+      if (outfit.ownerText) {
+        owner = scene.subjects.find(function (s) { return textOverlaps(outfit.ownerText, s.text || s.zh); }) || null;
+      }
+      if (!owner && scene.subjects.length === 1) owner = scene.subjects[0];
+      if (owner) outfit.ownerId = owner.id;
+    });
+    scene.subjects.forEach(function (subject) {
+      if (!subject.outfitColorText) return;
+      const match = scene.outfits.find(function (outfit) {
+        return outfit.color && (outfit.color.zh === subject.outfitColorText ||
+          textOverlaps(outfit.text || outfit.zh, subject.outfitColorText));
+      });
+      if (match && match.color) subject.outfitColor = match.color;
+      delete subject.outfitColorText;
+    });
+
+    // 5. 动作：以姿态单元为准；模型显式给了 actions 也保留。
+    scene.units.forEach(function (unit) {
+      if (unit.slot !== 'pose') return;
+      const actor = scene.subjects.find(function (s) { return textOverlaps(unit.text, s.text || s.zh); }) ||
+        scene.subjects[0] || null;
+      scene.actions.push({
+        id: nextId('a'),
+        subjectId: actor ? actor.id : '',
+        zh: unit.zh,
+        en: unit.en,
+        type: 'pose',
+        targetId: ''
+      });
+    });
+
+    // 6. 关系：wearing / located / next_to / holding / pose / distance。
+    const relationSeen = Object.create(null);
+    (Array.isArray(data.relations) ? data.relations : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const type = cleanText(item.type) || 'other';
+      const text = cleanText(item.text || '');
+      const from = cleanText(item.from || '');
+      const to = cleanText(item.to || '');
+      if (!text && !to && !from) return;
+      const span = specSpan(text || to || from, 'pose');
+      const subject = from ? scene.subjects.find(function (s) { return textOverlaps(from, s.text || s.zh); }) : scene.subjects[0];
+      const object = to ? scene.objects.find(function (o) { return textOverlaps(to, o.text || o.zh); }) : null;
+      const outfit = to ? scene.outfits.find(function (o) { return textOverlaps(to, o.text || o.zh); }) : null;
+      let verify = span.en || '';
+      if (type === 'wearing' && outfit) verify = outfit.en;
+      else if (object) verify = object.en;
+      const parsedRelation = text && relationParses[text] && (relationParses[text].relations || []).find(function (r) {
+        return r && (r.en || r.verify);
+      });
+      if (parsedRelation && parsedRelation.verify) verify = parsedRelation.verify;
+      if (!verify) return;
+      const key = type + '|' + verify.toLowerCase() + '|' + text;
+      if (relationSeen[key]) return;
+      relationSeen[key] = true;
+      scene.relations.push({
+        type: type,
+        subjectId: subject ? subject.id : '',
+        objectId: object ? object.id : '',
+        outfitId: outfit ? outfit.id : '',
+        zh: text || (from + to),
+        en: (parsedRelation && parsedRelation.en) || span.en || verify,
+        verify: verify
+      });
+    });
+
+    // 7. 否定与作用范围：不改写成肯定，也不把局部否定升级成全局。
+    function ensurePersonSubject() {
+      if (scene.subjects.length) return;
+      const subject = {
+        id: nextId('s'), zh: '人物', en: 'a person', category: 'subject',
+        attributes: [], outfitColor: null, text: '人物'
+      };
+      scene.subjects.push(subject);
+      scene.units.unshift(makeUnit('person', '人物', 'a person', '人物', 'subject', {
+        source: 'local-llm', role: 'subject', entityId: subject.id
+      }));
+    }
+
+    function addNegation(item) {
+      if (!item) return;
+      const rawTarget = normalizeSpecTarget(item.target || item.text || '');
+      if (!rawTarget) return;
+      const targets = expandNegationTarget(rawTarget);
+      if (!targets.length) return;
+      const scope = normalizeSpecScope(item.scope || item.topic || '');
+      const topic = cleanText(item.topic || '');
+      if (scope === 'subject') ensurePersonSubject();
+      scene.negations.push({
+        text: cleanText(item.text || rawTarget),
+        topic: topic || (scope === 'subject' ? '人物' : ''),
+        scope: scope,
+        targets: targets,
+        rawTarget: rawTarget,
+        negated: true
+      });
+      const topicInfo = topicZhEn(topic);
+      scene.scopes.push({
+        scope: scope,
+        topic: topicInfo.zh,
+        topicEn: topicInfo.en,
+        target: rawTarget,
+        targets: targets,
+        polarity: 'exclude',
+        exception: ''
+      });
+    }
+    (Array.isArray(data.negations) ? data.negations : []).forEach(function (item) {
+      if (typeof item === 'string') addNegation({ text: item, target: item });
+      else addNegation(item);
+    });
+
+    function addException(text) {
+      const span = specSpan(text, 'style');
+      if (!span.zh && !span.en) return;
+      const zh = span.zh || cleanText(text);
+      if (scene.exceptions.some(function (item) { return item.zh === zh; })) return;
+      scene.exceptions.push({ zh: zh, en: span.en || zh });
+    }
+
+    const scopeSeen = Object.create(null);
+    (Array.isArray(data.scopes) ? data.scopes : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      let polarity = cleanText(item.polarity) || 'apply';
+      if (['exclude', 'allow', 'apply'].indexOf(polarity) === -1) polarity = 'apply';
+      const target = normalizeSpecTarget(item.target || item.text || '');
+      if (!target) return;
+      const targets = polarity === 'exclude'
+        ? expandNegationTarget(target)
+        : (function () { const span = specSpan(target, 'style'); return [{ zh: span.zh || target, en: span.en || target }]; })();
+      if (!targets.length) return;
+      const scope = normalizeSpecScope(item.scope || '');
+      const exception = cleanText(item.exception || '');
+      const key = scope + '|' + polarity + '|' + target + '|' + exception;
+      if (scopeSeen[key]) return;
+      scopeSeen[key] = true;
+      const topicInfo = topicZhEn(cleanText(item.topic || ''));
+      scene.scopes.push({
+        scope: scope,
+        topic: topicInfo.zh,
+        topicEn: topicInfo.en,
+        target: target,
+        targets: targets,
+        polarity: polarity,
+        exception: exception,
+        exceptionEn: exception ? (specSpan(exception, 'style').en || exception) : ''
+      });
+      if (polarity === 'exclude') {
+        const exists = scene.negations.some(function (negation) {
+          return (negation.targets || []).some(function (t) {
+            return t.en && targets.some(function (x) { return x.en === t.en; });
+          });
+        });
+        if (!exists) {
+          const scopeTopic = cleanText(item.topic || '');
+          scene.negations.push({
+            text: cleanText(item.text || target),
+            topic: scopeTopic || (scope === 'subject' ? '人物' : ''),
+            scope: scope,
+            targets: targets,
+            rawTarget: target,
+            negated: true
+          });
+        }
+      }
+      if (exception) addException(exception);
+      if (scope === 'subject' && polarity === 'exclude') ensurePersonSubject();
+    });
+
+    (Array.isArray(data.exceptions) ? data.exceptions : []).forEach(function (item) {
+      if (typeof item === 'string') addException(item);
+      else if (item && typeof item === 'object') addException(item.text || item.exception || '');
+    });
+
+    // 作用范围去重：否定生成的 scope 和模型显式 scope 可能重复。
+    const dedupScopes = [];
+    scene.scopes.forEach(function (scope) {
+      const key = scope.scope + '|' + scope.polarity + '|' + (scope.target || '') + '|' + (scope.exception || '');
+      const found = dedupScopes.some(function (item) {
+        return item.scope + '|' + item.polarity + '|' + (item.target || '') + '|' + (item.exception || '') === key;
+      });
+      if (!found) dedupScopes.push(scope);
+    });
+    scene.scopes = dedupScopes;
+
+    // 单元顺序保持模型给定的顺序；六框投影和组装继续用同一套 rules。
+    scene.segmentation = { tokens: [], alternatives: [], ambiguous: false, score: 0 };
+    finalizeScene(scene, source);
+    return scene;
+  }
+
   T2I.Scene = {
     compile: compile,
     project: project,
@@ -2149,6 +2728,8 @@
     negativePlan: negativePlan,
     verify: verify,
     segmentLattice: segmentLattice,
+    fromSpec: fromSpec,
+    translateSpan: specSpan,
     show: function (scene) { return JSON.parse(JSON.stringify(scene)); },
     slots: SLOTS,
     slotLabel: SLOT_LABEL

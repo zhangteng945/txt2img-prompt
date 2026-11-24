@@ -16,7 +16,7 @@
   const STORAGE_KEY = 't2i.lexiconFeedback.v1';
   const SCHEMA_ID = 't2i.lexicon-feedback/v1';
   const SCHEMA_URL = 'feedback/schema.json';
-  const PAGE_VERSION = '2026.11.24-feedback.1';
+  const PAGE_VERSION = '2026.11.24-local-llm.1';
   const MAX_CONTEXTS = 5;
   const MAX_TERMS = 300;
   const NOTE_MAX = 600;

@@ -17,6 +17,7 @@
   const Negative = T2I.Negative;
   const Feedback = T2I.Feedback;
   const Scene = T2I.Scene;
+  const LocalLLM = T2I.LocalLLM;
 
   const STORAGE_KEYS = {
     favorites: 't2i.favorites.v1',
@@ -55,7 +56,14 @@
     searchTimer: null,
     lastFocused: null,
     allowCompletion: false,
-    verify: null
+    verify: null,
+    localLLM: {
+      settings: LocalLLM.loadSettings(window.localStorage),
+      running: false,
+      controller: null,
+      runId: 0,
+      abortRequested: false
+    }
   };
 
   const el = {
@@ -70,6 +78,14 @@
     warningText: document.getElementById('warningText'),
     scenePanel: document.getElementById('scenePanel'),
     allowCompletion: document.getElementById('allowCompletion'),
+    localLLMEnabled: document.getElementById('localLLMEnabled'),
+    localLLMApiRoot: document.getElementById('localLLMApiRoot'),
+    localLLMModel: document.getElementById('localLLMModel'),
+    localLLMHint: document.getElementById('localLLMHint'),
+    localLLMStatus: document.getElementById('localLLMStatus'),
+    localLLMStatusTitle: document.getElementById('localLLMStatusTitle'),
+    localLLMStatusDetail: document.getElementById('localLLMStatusDetail'),
+    localLLMAbort: document.getElementById('localLLMAbort'),
     generateBtn: document.getElementById('generateBtn'),
     outputSection: document.getElementById('outputSection'),
     outputMeta: document.getElementById('outputMeta'),
@@ -427,7 +443,8 @@
     const summary = scene.summary || {};
     el.scenePanel.innerHTML =
       '<div class="scene-panel-head"><strong>结构化场景</strong>' +
-      '<span>' + (scene.structured ? '六个框由这棵树投影' : '部分内容退回原有片段解析') +
+      '<span>' + (scene.origin === 'local-llm' ? '本地模型编译' : '规则编译器') + ' · ' +
+      (scene.structured ? '六个框由这棵树投影' : '部分内容退回原有片段解析') +
       ' · 主体 ' + (summary.subjectCount || 0) +
       ' · 物体 ' + (summary.objectCount || 0) +
       ' · 关系 ' + (summary.relationCount || 0) +
@@ -842,6 +859,7 @@
 
   function loadRecord(record) {
     if (!record || !record.slots) return;
+    cancelLocalFill('');
     const fresh = SF.emptySlots();
     SF.slots.forEach(function (key) {
       const saved = record.slots[key] || {};
@@ -1181,15 +1199,189 @@
     }
   }
 
-  function runFill() {
-    const idea = el.idea.value.trim();
-    if (!idea) {
-      setStatus('先写一句整体想法，再点「解析并填入各框」。', true);
-      el.idea.focus();
+  function localSecondsText(ms) {
+    const seconds = Number(ms) / 1000;
+    if (!isFinite(seconds) || seconds <= 0) return '不到 1 秒';
+    return (seconds < 10 ? seconds.toFixed(1) : String(Math.round(seconds))) + ' 秒';
+  }
+
+  function setLocalStatus(kind, title, detail) {
+    if (!el.localLLMStatus) return;
+    if (!kind) {
+      el.localLLMStatus.hidden = true;
+      el.localLLMStatus.className = 'local-llm-status';
+      if (el.localLLMStatusTitle) el.localLLMStatusTitle.textContent = '';
+      if (el.localLLMStatusDetail) el.localLLMStatusDetail.textContent = '';
+      if (el.localLLMAbort) el.localLLMAbort.hidden = true;
+      return;
+    }
+    el.localLLMStatus.hidden = false;
+    el.localLLMStatus.className = 'local-llm-status is-' + kind;
+    if (el.localLLMStatusTitle) el.localLLMStatusTitle.textContent = title || '';
+    if (el.localLLMStatusDetail) el.localLLMStatusDetail.textContent = detail || '';
+    if (el.localLLMAbort) el.localLLMAbort.hidden = kind !== 'running';
+  }
+
+  function updateLocalHint() {
+    if (!el.localLLMHint) return;
+    const root = LocalLLM.normalizeApiRoot(state.localLLM.settings.apiRoot);
+    const parts = [
+      '默认地址走 Tailscale Serve 的 HTTPS（仅尾网可达），不要占用 443 / 8080 / 8443。',
+      '当前 Ollama 没有鉴权，页面不需要也不会保存密钥。'
+    ];
+    let warning = false;
+    if (window.location && window.location.protocol === 'https:' && /^http:\/\//i.test(root)) {
+      parts.push('当前页面是 HTTPS，浏览器会以混合内容为由拦截 http:// 地址；本机调试请用 http://localhost 打开页面。');
+      warning = true;
+    }
+    if (/127\.0\.0\.1|localhost/i.test(root)) {
+      parts.push('手机上 127.0.0.1 不是这台 Mac；GitHub Pages 页面也不能直接请求本机回环地址。');
+      warning = true;
+    }
+    if (window.location && window.location.protocol === 'file:') {
+      parts.push('file:// 页面请求 Ollama 时 Origin 是 null，可能被 CORS 拒绝；建议用本地静态服务器或 GitHub Pages 打开。');
+      warning = true;
+    }
+    el.localLLMHint.textContent = parts.join(' ');
+    el.localLLMHint.classList.toggle('is-warning', warning);
+  }
+
+  function syncLocalSettingsUI() {
+    if (!el.localLLMEnabled) return;
+    const settings = state.localLLM.settings;
+    el.localLLMEnabled.checked = settings.enabled === true;
+    if (el.localLLMApiRoot) el.localLLMApiRoot.value = LocalLLM.normalizeApiRoot(settings.apiRoot);
+    if (el.localLLMModel) el.localLLMModel.value = LocalLLM.normalizeModel(settings.model);
+    updateLocalHint();
+  }
+
+  function persistLocalSettings() {
+    LocalLLM.saveSettings(window.localStorage, state.localLLM.settings);
+  }
+
+  function onLocalSettingsChange() {
+    const settings = state.localLLM.settings;
+    settings.enabled = !!(el.localLLMEnabled && el.localLLMEnabled.checked);
+    settings.apiRoot = LocalLLM.normalizeApiRoot(el.localLLMApiRoot ? el.localLLMApiRoot.value : '');
+    settings.model = LocalLLM.normalizeModel(el.localLLMModel ? el.localLLMModel.value : '');
+    if (el.localLLMApiRoot) el.localLLMApiRoot.value = settings.apiRoot;
+    if (el.localLLMModel) el.localLLMModel.value = settings.model;
+    persistLocalSettings();
+    updateLocalHint();
+    if (!settings.enabled) {
+      cancelLocalFill('');
+      setLocalStatus(null);
+    }
+  }
+
+  function cancelLocalFill(message) {
+    state.localLLM.runId += 1;
+    const controller = state.localLLM.controller;
+    state.localLLM.controller = null;
+    state.localLLM.running = false;
+    state.localLLM.abortRequested = false;
+    if (el.fillBtn) el.fillBtn.disabled = false;
+    if (controller) {
+      try { controller.abort(); } catch (err) { /* 忽略 */ }
+    }
+    if (message) setLocalStatus('fallback', '已中止本地解析', message);
+    else setLocalStatus(null);
+  }
+
+  function abortLocalFill() {
+    if (!state.localLLM.running) return;
+    state.localLLM.abortRequested = true;
+    const controller = state.localLLM.controller;
+    if (controller) {
+      try { controller.abort(); } catch (err) { /* 忽略 */ }
+    }
+    setLocalStatus('running', '正在中止…', '这次本地解析会停止，随后自动用规则编译器给出结果。');
+  }
+
+  function finishLocalFill(runId, idea, result) {
+    if (runId !== state.localLLM.runId || !state.localLLM.running) return;
+    state.localLLM.running = false;
+    state.localLLM.controller = null;
+    const abortedByUser = state.localLLM.abortRequested;
+    state.localLLM.abortRequested = false;
+    if (el.fillBtn) el.fillBtn.disabled = false;
+
+    if (result && result.status === 'ok') {
+      const warningCount = result.scene && result.scene.unknown ? result.scene.unknown.length : 0;
+      setLocalStatus(
+        'ok',
+        '本地解析完成',
+        '用时 ' + localSecondsText(result.elapsedMs) + '，模型 ' + result.model + '。' +
+        (warningCount ? '有 ' + warningCount + ' 处词库未收录，已在场景面板和警告条标出；' : '') +
+        '六个框由这棵场景树经同一套规则生成。'
+      );
+      fillFromParsed(result.parsed, { mode: 'local' });
       return;
     }
 
-    const parsed = Parser.parse(idea);
+    const code = (result && result.code) || 'unexpected';
+    let reason = LocalLLM.reasonText(code);
+    if (code === 'aborted' && !abortedByUser) reason = '本地解析已中止';
+    let detail = '原因：' + reason + '。';
+    if (code === 'network') {
+      detail += '请确认：Ollama 已打开且 11434 在监听、电脑没有休眠、Tailscale 已连上、Tailscale Serve 和 CORS 已放行。';
+    } else if (code === 'cors') {
+      detail += '当前 Origin 是 ' + (window.location && window.location.origin ? window.location.origin : '本页') +
+        '，需要在 Ollama 侧放行；手机访问时也要确认该地址在尾网内可达。';
+    } else if (code === 'timeout') {
+      detail += '首次加载模型可能较慢，可以重试，或先在本机用 ollama 跑一次让模型常驻。';
+    } else if (code === 'config') {
+      detail += '请在「连接设置」里填写完整的 http(s):// 地址。';
+    }
+    if (result && result.detail && ['invalid-json', 'invalid-spec', 'coverage', 'negation', 'conservation', 'server'].indexOf(code) !== -1) {
+      detail += ' 细节：' + result.detail + '。';
+    }
+    detail += ' 这次没有用上本地模型，已自动用规则编译器生成可用结果。';
+    setLocalStatus('fallback', '已回退规则', detail);
+    fillFromParsed(Parser.parse(idea), { mode: 'fallback' });
+  }
+
+  function startLocalFill(idea) {
+    if (state.localLLM.running) return;
+    const runId = state.localLLM.runId + 1;
+    state.localLLM.runId = runId;
+    let controller = null;
+    try {
+      controller = new AbortController();
+    } catch (err) {
+      controller = null;
+    }
+    state.localLLM.running = true;
+    state.localLLM.abortRequested = false;
+    state.localLLM.controller = controller;
+    if (el.fillBtn) el.fillBtn.disabled = true;
+    const model = LocalLLM.normalizeModel(state.localLLM.settings.model);
+    setLocalStatus(
+      'running',
+      '本地解析中',
+      '正在请求本机 ' + model + '；首次加载可能要十几秒，最长等 ' +
+      Math.round(LocalLLM.TIMEOUT_MS / 1000) + ' 秒，可以点「中止」。'
+    );
+
+    LocalLLM.compile(state.localLLM.settings, idea, {
+      signal: controller ? controller.signal : undefined,
+      completion: state.allowCompletion,
+      quality: state.allowCompletion,
+      timeoutMs: LocalLLM.TIMEOUT_MS
+    }).then(function (result) {
+      finishLocalFill(runId, idea, result);
+    }).catch(function (err) {
+      finishLocalFill(runId, idea, {
+        status: 'fallback',
+        code: 'unexpected',
+        reason: String(err && err.message ? err.message : err)
+      });
+    });
+  }
+
+  function fillFromParsed(parsed, meta) {
+    const mode = meta && meta.mode;
+    const lead = mode === 'local' ? '本地解析完成：' : (mode === 'fallback' ? '已回退规则：' : '');
     const scene = parsed.scene;
     const hasUnits = scene ? (scene.units || []).length > 0 : (parsed.segments || []).length > 0;
     const hasConstraints = !!(scene && ((scene.negations || []).length || (scene.scopes || []).length));
@@ -1202,7 +1394,7 @@
       renderScene(scene);
       updateWarningFromState();
       hideOutput();
-      setStatus('这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
+      setStatus(lead + '这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
       return;
     }
 
@@ -1234,7 +1426,7 @@
     writeAllSlotsToDom();
     renderScene(scene);
     updateWarningFromState();
-    collectFeedback(idea);
+    collectFeedback(parsed.raw || el.idea.value);
     hideOutput();
 
     const counts = {};
@@ -1243,20 +1435,21 @@
       .map(function (def) { return def.label.replace(/与.*/, '') + ' ' + counts[def.key]; })
       .join(' · ');
     const completionCount = completed.added.length;
+    const isLocal = !!(scene && scene.origin === 'local-llm');
     const structure = scene && scene.structured
-      ? '结构化场景：主体 ' + (scene.summary.subjectCount || 0) +
+      ? (isLocal ? '本地模型结构化场景：' : '结构化场景：') + '主体 ' + (scene.summary.subjectCount || 0) +
         ' · 物体 ' + (scene.summary.objectCount || 0) +
         ' · 关系 ' + (scene.summary.relationCount || 0) +
         ' · 否定 ' + (scene.summary.negationCount || 0) + '。'
       : '部分内容沿用了片段解析。';
 
     if (!hasUnits && hasConstraints) {
-      setStatus('只解析出否定 / 作用范围约束：正面框为空，负面提示词会按约束生成。可继续补充想画的内容。', false);
+      setStatus(lead + '只解析出否定 / 作用范围约束：正面框为空，负面提示词会按约束生成。可继续补充想画的内容。', false);
     } else if (!hasUnits) {
-      setStatus('这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
+      setStatus(lead + '这段想法暂时没能拆出可用的提示词片段，试试用「人物、穿着、站在、光线、风格」这类词分隔。', true);
     } else {
       setStatus(
-        structure + '已投影到六框（' + summary + '）。' +
+        lead + structure + '已投影到六框（' + summary + '）。' +
         (state.allowCompletion ? '规则补全 ' + completionCount + ' 项，已在框下标出。' : '规则补全默认关闭，没有擅自补光线/镜头/画风。') +
         (scene && scene.ambiguities && scene.ambiguities.length ? ' 分词仍有备选解释，已保留在结构化场景里。' : ''),
         false
@@ -1286,7 +1479,25 @@
     }, 90);
   }
 
+  function runFill() {
+    const idea = el.idea.value.trim();
+    if (!idea) {
+      setStatus('先写一句整体想法，再点「解析并填入各框」。', true);
+      el.idea.focus();
+      return;
+    }
+
+    if (!state.localLLM.settings.enabled) {
+      setLocalStatus(null);
+      fillFromParsed(Parser.parse(idea), { mode: 'rule' });
+      return;
+    }
+
+    startLocalFill(idea);
+  }
+
   function clearAll() {
+    cancelLocalFill('');
     state.slots = SF.emptySlots();
     state.parsed = null;
     state.generated = null;
@@ -1385,7 +1596,8 @@
     el.outputMeta.textContent =
       assembled.phraseCount + ' 个正面短语 · ' + negative.items.length + ' 个负面词' +
       (negative.extraItems.length ? ' · 其中 ' + negative.extraItems.length + ' 个来自本轮否定/范围约束' : '') +
-      (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '');
+      (assembled.quality.length ? ' · 补全质量词 ' + assembled.quality.length + ' 个' : '') +
+      (scene && scene.origin === 'local-llm' ? ' · 结构来自本地解析模型' : '');
 
     if (assembled.quality.length) {
       el.outputFootnote.textContent = '末尾质量词为勾选规则补全后加入：' +
@@ -1509,6 +1721,7 @@
   function applyExample(index) {
     const text = EXAMPLES[index];
     if (!text) return;
+    cancelLocalFill('');
     el.idea.value = text;
     updateIdeaCount();
     runFill();
@@ -1531,7 +1744,20 @@
     el.fillBtn.addEventListener('click', runFill);
     el.resetBtn.addEventListener('click', clearAll);
     el.generateBtn.addEventListener('click', generate);
-    el.idea.addEventListener('input', updateIdeaCount);
+    el.idea.addEventListener('input', function () {
+      updateIdeaCount();
+      if (state.localLLM.running) cancelLocalFill('想法已修改，已中止上一次本地解析，请重新点「解析并填入各框」。');
+    });
+    if (el.localLLMEnabled) el.localLLMEnabled.addEventListener('change', onLocalSettingsChange);
+    if (el.localLLMApiRoot) {
+      el.localLLMApiRoot.addEventListener('change', onLocalSettingsChange);
+      el.localLLMApiRoot.addEventListener('blur', onLocalSettingsChange);
+    }
+    if (el.localLLMModel) {
+      el.localLLMModel.addEventListener('change', onLocalSettingsChange);
+      el.localLLMModel.addEventListener('blur', onLocalSettingsChange);
+    }
+    if (el.localLLMAbort) el.localLLMAbort.addEventListener('click', abortLocalFill);
     el.saveFavoriteBtn.addEventListener('click', saveFavorite);
     el.saveFavoriteBtnOutput.addEventListener('click', saveFavorite);
     el.favoritesBtn.addEventListener('click', function () { openLibrary('favorites'); });
@@ -1668,6 +1894,7 @@
   function init() {
     renderSlots();
     bindStaticEvents();
+    syncLocalSettingsUI();
     updateIdeaCount();
     writeAllSlotsToDom();
     state.favorites = loadStore(STORAGE_KEYS.favorites).filter(function (item) {

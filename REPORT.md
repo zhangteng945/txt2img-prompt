@@ -5,7 +5,7 @@
 已在 `/Users/zhangteng/txt2img-prompt` 完成一个可直接打开、可直接部署到 GitHub Pages 的静态文生图提示词工具。
 
 - 入口：根目录 `index.html`
-- 纯 HTML / CSS / 原生 JavaScript，无框架、无构建步骤、无网络请求、无后端
+- 纯 HTML / CSS / 原生 JavaScript，无框架、无构建步骤、无后端；默认不联网，可选接入本机 Ollama
 - 桌面双栏、手机单栏；已在 1400px 与 390px 宽度下用真实 WebKit 渲染检查
 - 六个框均为中文 + 英文对照，可分别编辑
 - 搜索词库 / 已填框 / 收藏 / 历史，词库结果可一键填入对应框
@@ -16,7 +16,8 @@
 - 新增「待补录」反馈通道：未收录片段自动记入本机、去重计数、保留最近上下文，可写备注并导出 Markdown + JSON 或预填 GitHub issue
 - 上一轮词典在 10,718 条基础上补厚到 **13,232 条规范词**（人工 7,183 + 组合 6,049）；object 从 **346 条增至 2,859 条**，按生活场景补了家具、厨房、食物、家电数码、文具玩具、运动乐器、街边设施、交通/建筑局部、自然物和动物用品。高频外貌匹配、短别名边界、「拒绝抽烟的广告」等既有回归继续通过
 - **本轮（全类词库拓宽）**把词典从 **13,232 条扩到 14,445 条**，新增 **1,213 条**规范词；新增 `action` 行为动作 **331 条**、`sign` 告示标识 **163 条**，其余补在人物、外貌、表情、发型、眼妆、服装、配饰、场景、物体、光线、镜头、画风、材质、图案、氛围。既有反馈通道、短别名边界、拒绝抽烟的广告、object 约 2,859、关系句分框回归继续通过。详见 1.2。
-- 不读取密钥，不访问大模型或付费 API
+- 本轮新增可选的「使用本地解析模型」开关（默认关闭）：打开后请求本机/Tailscale 上的 Ollama `qwen3.5:4b`，失败自动回退规则；关闭时零模型请求。详见 1.4。
+- 不读取密钥，不访问网络大模型或付费 API；只允许用户在开关打开后访问自己填写的本机/Tailscale Ollama 地址
 
 ### 1.1 上一轮追加：未收录反馈通道
 
@@ -200,6 +201,68 @@
 - 新增 7 项结构回归：对象-属性-关系（长发女孩/白裙、红衣女孩/蓝车/白房子）、否定与作用范围、局部 blur、例外、女人张开五指、动作与地点分框、多候选歧义、语义守恒（否定泄漏/未翻译/擅自补光）。
 - 既有 29 项全部继续通过，包括「拒绝抽烟的广告」「小狗在车轮上撒尿」「走在沙滩上」、告示固定短语、禁止吸烟 ≠ 吸烟、短别名不切长词、补全默认关闭后显式开启的记录、待补录导出。
 - 不宣称覆盖率 99%，也没有给出没有依据的准确率。
+
+### 1.4 本轮追加：可选接入本机 Ollama 解析（默认关闭）
+
+本轮只在现有项目上加一个**可选开关**，不改规则编译器作为默认和回退路径。没有另起项目，没有改 `ant-architect`，没有调用网络大模型接口，没有读取或打印密钥，没有 push，也没有发布 GitHub Pages；没有改 Tailscale / Ollama 的系统配置，没有启动或杀掉 Lustify / ComfyUI / Ollama，也没有 pull 新模型。
+
+**界面与默认值**
+
+- 新增「使用本地解析模型」开关，默认关闭，状态存 `localStorage` 键 `t2i.localLLM.v1`。
+- 可展开编辑 API 根地址和模型名：
+  - 默认 API 根地址 `https://macbook-pro.tail349cac.ts.net:11434`（Tailscale Serve，HTTPS，仅尾网；不占 443 / 8080 / 8443）。
+  - 默认模型 `qwen3.5:4b`。
+  - 当前 Ollama 无鉴权，不做假的密钥框，页面不保存密钥。
+- 状态行明确区分「本地解析中 / 本地解析完成 / 已回退规则」，回退时写原因：未开启服务、超时、网络、CORS、HTTP 错误、返回不是 JSON、结构不合法、漏写/改写原文、否定丢失、守恒失败、用户中止等。点「中止」会停止当前请求并自动用规则给出结果。
+- 开关关闭时不发任何模型请求，行为与 1406 冻结版一致；六个框、正负提示词、结构化场景面板、待补录、短别名边界、词库和默认关闭的规则补全都继续可用。
+
+**请求协议**
+
+- `POST {apiRoot}/api/chat`，JSON，`stream:false`，`think:false`，`format:"json"`，`temperature:0`。
+- 只发系统说明 + 用户原文，不把词库塞进请求。
+- 超时默认 50 秒，可用 AbortController 中止；首次加载模型较慢时仍有机会返回。
+- 返回内容先去掉 `<think>...</think>` 残留和 Markdown 代码围栏，再取第一个 `{` 到最后一个 `}` 解析；兼容 `message.content`、`response` 和 OpenAI 兼容的 `choices[0].message.content`。
+
+**模型输出如何接入现有结构**
+
+系统提示要求只输出一个 JSON 对象，并只允许：
+
+- `units`：原文片段、槽位（person / outfit / pose / scene / light / style）、角色（subject / outfit / object / action / place / light / style / sign 等）；
+- `subjects` / `outfits` / `objects`：人物、服装、物体的属性、颜色、距离；
+- `relations`：穿着、位于、旁边、拿着、动作、距离；
+- `negations` / `scopes` / `exceptions`：否定、作用范围、例外，保留「禁止 / 请勿 / 不要 / 除了…」等原意，不去敏感化；
+- 不编造用户没说的光线、镜头、风格、身份或剧情。
+
+接入不另做一套拼英文逻辑：
+
+1. `js/scene.js` 新增 `fromSpec(spec, raw)`，把上面的 JSON 建成与规则编译器同形的场景树（subjects / objects / outfits / actions / relations / negations / scopes / exceptions / units）。
+2. 每个原文片段的英文仍由 `scene.js` 的词典翻译、`parseSubjectPhrase` / `parseOutfitPhrase` / `parseObjectPhrase` 和 `translator.js` 生成；颜色绑定、穿着、方位关系、否定计划继续走原函数。
+3. 六个框由 `slot-fill.js` 从同一棵树的 `units` 投影；正面由 `assemble.js` 组装；负面由 `negative.js` + `Scene.negativePlan` 生成；最后 `Scene.verify` 做语义守恒检查。
+4. 模型漏掉、改写或无法对应的片段不会假装完整：所有 `text` 必须是原文连续子串；覆盖检查要求实义字符都被 units / 实体 / 否定 / 例外覆盖；否定 cue 必须仍是否定或保留「prohibited / no / not」含义。任一校验失败，`local-llm.js` 返回 `fallback`，界面改走规则编译器。
+5. 只有本地解析成功且守恒检查没有 error 才采用模型结果；warning（如词库未收录）会保留并在场景面板/警告条标出。
+
+**失败回退**
+
+- 关开关、没有 fetch、地址不是 http(s)：不发请求；关闭时零请求。
+- 超时、网络错误、CORS / 403、5xx、响应没有 content、JSON 无效、schema 不合法、原文被改写、覆盖缺口、否定丢失、守恒 error：全部自动回退规则编译器，并在「已回退规则」状态行写明原因，不会留下空提示词。
+- 网络/CORS 失败时明确提示可能原因：模型没开、电脑休眠、Tailscale 未连上、Serve/CORS 未放行；并提醒手机 `127.0.0.1` 不是这台 Mac、GitHub Pages 的 HTTPS 不能请求 `http://127.0.0.1`。
+
+**验证**
+
+- `node tests/core.test.js` → **36 项全部通过**（既有回归未受影响）。
+- 新增 `tests/local-llm.test.js` → **19 项全部通过**，全部用 mock fetch，不依赖 Ollama 正在运行：
+  - 成功 JSON → 场景树/主体/服装/颜色/物体/关系/六框/正负面/守恒；
+  - think 标签 + 代码围栏清理；
+  - 无效 JSON、slot 不合法、改写原文、漏写片段、否定丢失 → 回退并给原因；
+  - 超时（AbortController 生效）、网络错误、HTTP 403 → 回退；
+  - 开关关闭 → disabled 且零请求，规则路径仍能给出可用结果；
+  - 请求体只有 system + user、`think:false`、非流式、`format:"json"`，不包含词库；
+  - 设置默认值与 localStorage 往返；
+  - 对象属性/颜色/关系/例外进入同一棵树；
+  - 关系句「站在蓝色汽车旁」复用规则拆分，颜色绑到汽车，不出现 `blue, car`；
+  - 只给 `scopes` 的纯排除约束也能保留否定并生成 `watermark on background`。
+- 另外用临时 jsdom（不随项目发布）做了界面流程检查：默认关闭零请求、网络错误回退、成功 JSON 后场景面板显示「本地模型编译」且生成输出、无效 JSON 回退、再次关闭零请求、运行中点「中止」回退、运行中关闭开关中止且不残留状态。没有读取真实 Ollama，也没有启动/停止任何服务。
+- 本轮没有宣称覆盖率 99%，也没有给出没有依据的准确率。
 
 ## 2. 算法步骤
 
@@ -764,6 +827,17 @@
 - 语义守恒：`不要帽子` 的正面为空、负面含 hat；人为构造正面 `a woman wearing a hat` 时返回 `NEGATION_LEAK`；未识别「量子蝴蝶」返回 `UNTRANSLATED_CONTENT`；无光线却出现 `soft natural light / 50mm lens` 返回 `EXTRA_LIGHTING`。
 - 既有 29 项全部继续通过；本轮共 **36 项**通过。
 
+### 4.8 本轮本地模型接入回归
+
+- `node tests/local-llm.test.js` → **19 项全部通过**；`node tests/core.test.js` → **36 项全部通过**。
+- 成功样例 `短发女人穿米色风衣站在樱花树下，柔和自然光`：模型 JSON 建出 1 个主体（属性短发、衣服米色）、1 个物体（樱花树）、located 关系；六框分别为 `a woman with short hair` / `wearing a beige trench coat` / `standing under a cherry blossom tree` / `soft natural light`；正面含 `beige trench coat` 与 `cherry blossom tree`，守恒检查 0 issue。
+- 失败样例全部回退且给出原因：无效 JSON → `invalid-json`；slot 不合法 → `invalid-spec`；`少女` 改写原文 → `invalid-spec`；漏写 `米色风衣 / 柔和自然光` → `coverage`；`不要吸烟` 被写成普通单元 → `negation`；超时 → `timeout`；`Failed to fetch` → `network`；HTTP 403 → `cors`。
+- 否定样例 `画面里不要有水印`：正面为空，负面补 `watermark`，scene.negations 为 global；`禁止吸烟` 作为告示牌单元仍是 `smoking prohibited`，不退成单纯 `smoking`。
+- 关系句颜色绑定：`穿红色裙子的女孩站在蓝色汽车旁` 的模型 JSON 经 `fromSpec` 后，姿态是 `standing`、场景是 `next to a blue car`，正面为 `a girl wearing a red dress, standing next to a blue car`，守恒检查通过，不再出现把颜色和名词拆开的 `blue, car`。
+- 纯排除作用域：`units:[]` + `scopes:[{scope:"background", polarity:"exclude", target:"水印"}]` 也能通过校验、生成 `watermark on background`，不会把否定丢掉。
+- 开关关闭零请求；规则路径仍能生成正负面。请求体只有 2 条 message（system + user），`think:false`，`stream:false`，`format:"json"`，系统提示 < 4,000 字符，不含整部词库。
+- 临时 jsdom 检查了开关、状态行、连接设置、中止按钮、localStorage 和生成输出；这些工具不随项目发布。
+
 ## 5. 已知局限 / 仍可能缺的类别
 
 
@@ -787,13 +861,15 @@
 12. **单字别名边界规则偏保守**：未收录的复合词（如「笑点」）会整体保留原文，而不是拆成「已知单字 + 残片」。这是为了避免「抽烟 → 拒绝抽 + 烟」这类误切；后续遇到新词应补独立词条，而不是放宽边界规则。
 13. **待补录只在本机**：数据存在当前浏览器 `localStorage`，不跨设备、不自动同步；清理浏览器数据会丢失。GitHub issue 必须由用户手动确认提交，页面不会自动建 issue，也不含 token。
 14. **「词库已可命中」只是当前版本的判断**：它表示当前词典能完整翻译该片段，不代表所有上下文都自然；复杂说法仍以人工补词和回归测试为准。
+15. **本地模型是可选增强，不是默认路径**：首次加载 `qwen3.5:4b` 可能要十几秒；需要 Ollama 在跑、电脑不休眠、Tailscale Serve 可访问，并且 Ollama 的 CORS 放行 `https://zhangteng945.github.io`。任何一环不满足都会回退规则；规则结果仍然可能不完整，界面会标出未收录内容。
+16. **本地模型结果会被严格校验**：模型必须逐字复制原文片段并覆盖全部实义内容；同义改写、漏写、编造、否定丢失都会整次回退，而不是局部采纳。这样更保守，但复杂长句可能因此退回规则。
 
 ## 6. 文件清单
 
 - `index.html`、`styles.css`
-- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/scene.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/feedback.js`、`js/app.js`
+- `js/utils.js`、`js/lexicon.js`、`js/translator.js`、`js/scene.js`、`js/parser.js`、`js/slot-fill.js`、`js/complete.js`、`js/assemble.js`、`js/negative.js`、`js/feedback.js`、`js/local-llm.js`、`js/app.js`
 - `js/lexicon.js` 内含 `GROUPS`、`EXTRA_GROUPS`、`COVERAGE_GROUPS` 人工词条，以及 `GARMENT_COLOR_ZH`、`MATERIAL_GARMENTS_ZH`、`PATTERN_GARMENTS_ZH` 等受限组合规则；`js/app.js` 内含搜索、收藏、历史、待补录面板、预览和 localStorage 逻辑
-- `tests/core.test.js`
+- `tests/core.test.js`、`tests/local-llm.test.js`
 - `feedback/schema.json`、`feedback/README.md`
 - `.github/ISSUE_TEMPLATE/lexicon-feedback.md`
 - `BRIEF-process-feedback.md`

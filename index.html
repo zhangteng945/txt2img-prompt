@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f3eee2">
-  <meta name="description" content="纯本地规则与词典驱动的中文文生图提示词生成器：先编结构化场景，再从中英同一棵树投影六个框和最终提示词；支持词库搜索、收藏、历史、未收录待补录反馈，默认不自动补光线镜头。">
+  <meta name="description" content="规则与词典驱动的中文文生图提示词生成器：先编结构化场景，再从同一棵树投影六个框和最终提示词；可选择接入本机 Ollama，失败自动回退规则。支持词库搜索、收藏、历史、未收录待补录反馈，默认不自动补光线镜头。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1406">
+  <link rel="stylesheet" href="styles.css?v=20261124-1440">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -20,8 +20,8 @@
       </span>
     </a>
     <div class="header-badges" aria-label="产品特性">
-      <span>纯本地</span>
-      <span>零 API</span>
+      <span>默认纯本地</span>
+      <span>可选本机模型</span>
       <span>手机可用</span>
     </div>
   </header>
@@ -65,6 +65,35 @@
           <span>允许规则补全（默认关闭）</span>
           <small>仅在勾选后补光线、镜头、画风；不编造人物、服装、伤势或情绪</small>
         </label>
+
+        <div class="local-llm">
+          <label class="completion-toggle local-llm-toggle" for="localLLMEnabled">
+            <input type="checkbox" id="localLLMEnabled">
+            <span>使用本地解析模型（默认关闭）</span>
+            <small>打开后由本机 Ollama 的 qwen3.5:4b 先编译场景；关掉、超时、跨域、模型没开或返回无效都会自动回退规则编译器，不会留下空提示词</small>
+          </label>
+          <details class="local-llm-config">
+            <summary>连接设置（当前 Ollama 无鉴权，不需要密钥）</summary>
+            <div class="local-llm-fields">
+              <label class="local-llm-field" for="localLLMApiRoot">
+                <span>API 根地址</span>
+                <input id="localLLMApiRoot" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://macbook-pro.tail349cac.ts.net:11434">
+              </label>
+              <label class="local-llm-field" for="localLLMModel">
+                <span>模型名</span>
+                <input id="localLLMModel" type="text" autocomplete="off" spellcheck="false" placeholder="qwen3.5:4b">
+              </label>
+            </div>
+            <p id="localLLMHint" class="local-llm-hint"></p>
+          </details>
+          <div id="localLLMStatus" class="local-llm-status" role="status" aria-live="polite" hidden>
+            <span class="local-llm-dot" aria-hidden="true"></span>
+            <strong id="localLLMStatusTitle"></strong>
+            <span id="localLLMStatusDetail" class="local-llm-detail"></span>
+            <button type="button" id="localLLMAbort" class="local-llm-abort" hidden>中止</button>
+          </div>
+        </div>
+
         <p id="parseStatus" class="status-line" role="status" aria-live="polite"></p>
       </div>
     </section>
@@ -176,7 +205,7 @@
     </section>
 
     <footer class="site-footer">
-      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板，不调用大模型，不上传数据。</p>
+      <p><strong>大肥鱼提示词工坊</strong> · 规则 + 词典 + 模板；可选接入本机 Ollama，默认关闭，不上传数据。</p>
       <p>兼容 Lustify Endgame（SDXL）与 ComfyUI。提示词可继续按你的模型习惯微调。</p>
     </footer>
   </main>
@@ -277,16 +306,17 @@
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1406"></script>
-  <script src="js/lexicon.js?v=20261124-1406"></script>
-  <script src="js/translator.js?v=20261124-1406"></script>
-  <script src="js/scene.js?v=20261124-1406"></script>
-  <script src="js/parser.js?v=20261124-1406"></script>
-  <script src="js/slot-fill.js?v=20261124-1406"></script>
-  <script src="js/complete.js?v=20261124-1406"></script>
-  <script src="js/assemble.js?v=20261124-1406"></script>
-  <script src="js/negative.js?v=20261124-1406"></script>
-  <script src="js/feedback.js?v=20261124-1406"></script>
-  <script src="js/app.js?v=20261124-1406"></script>
+  <script src="js/utils.js?v=20261124-1440"></script>
+  <script src="js/lexicon.js?v=20261124-1440"></script>
+  <script src="js/translator.js?v=20261124-1440"></script>
+  <script src="js/scene.js?v=20261124-1440"></script>
+  <script src="js/parser.js?v=20261124-1440"></script>
+  <script src="js/slot-fill.js?v=20261124-1440"></script>
+  <script src="js/complete.js?v=20261124-1440"></script>
+  <script src="js/assemble.js?v=20261124-1440"></script>
+  <script src="js/negative.js?v=20261124-1440"></script>
+  <script src="js/feedback.js?v=20261124-1440"></script>
+  <script src="js/local-llm.js?v=20261124-1440"></script>
+  <script src="js/app.js?v=20261124-1440"></script>
 </body>
 </html>

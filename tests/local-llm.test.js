@@ -87,6 +87,37 @@ function okFetch(payload) {
   };
 }
 
+// 最终产物只允许生图提示词短语；这里只检查形态，不检查具体某个词。
+const NARRATIVE_RE = [
+  /(?:^|,\s*)(?:a scene of|this image depicts|the picture shows|there is|there are|in this image|a photograph of)\b/i,
+  /\b(?:is|are|was|were|has|have|had|will|would|can|could|does|do|did)\b/i,
+  /\b(?:stands|sits|reads|looks|wears|holds|walks|watches|smiles|waits|cooks|eats|drinks|talks|leans|carries|runs|sleeps|works|writes|paints|plays|sings|dances|smokes)\b/i,
+  /[.!?。！？]\s*$/
+];
+
+function assertPromptStyle(text, label) {
+  const value = String(text == null ? '' : text);
+  NARRATIVE_RE.forEach(function (re) {
+    assert.ok(!re.test(value), (label || '英文') + ' 仍是叙述句：' + value);
+  });
+  assert.ok(!/[\u3400-\u9fff]/.test(value), (label || '英文') + ' 不应残留中文：' + value);
+}
+
+function assertNoNarrativeOpeners(text, label) {
+  const value = String(text == null ? '' : text);
+  [
+    /a scene of/i,
+    /this image depicts/i,
+    /there is/i,
+    /there are/i,
+    /the picture shows/i,
+    /in this image/i,
+    /a photograph of/i
+  ].forEach(function (re) {
+    assert.ok(!re.test(value), (label || '最终正面') + ' 含叙述套话：' + value);
+  });
+}
+
 function fieldState(payload) {
   const fields = JSON.parse(JSON.stringify(payload.fields));
   const slots = PromptFlow.normalizeSlots(fields);
@@ -155,6 +186,184 @@ test('成功路径不调用 Parser / 规则编译器（不静默走规则）', f
   }).finally(function () {
     Parser.parse = original;
   });
+});
+
+test('提示词形态：初次拆解的字段英文和最终正面都是逗号分隔短语，不是叙述句', function () {
+  const payload = successPayload({
+    fields: {
+      person: { zh: '年轻女人', en: 'A young woman is sitting by the window.' },
+      outfit: { zh: '白衬衫和牛仔裤', en: 'wearing a white shirt and jeans' },
+      pose: { zh: '坐在窗边看书', en: 'Reading a book by the window.' },
+      scene: { zh: '清晨的咖啡馆', en: 'There is a cafe in the morning.' },
+      light: { zh: '柔和窗光', en: 'The picture shows soft window light.' },
+      style: { zh: '', en: '' }
+    },
+    negative: { zh: '低质量、模糊、水印、禁止吸烟', en: 'low quality, blurry, watermark, no smoking' }
+  });
+  return LocalLLM.generate(settings(), '年轻女人坐在清晨的咖啡馆窗边看书，柔和窗光', {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    LocalLLM.SLOTS.forEach(function (key) {
+      if (result.fields[key].en) assertPromptStyle(result.fields[key].en, key);
+    });
+    assert.ok(/a young woman sitting by the window/.test(result.fields.person.en), result.fields.person.en);
+    assert.ok(!/\bis\b/i.test(result.fields.person.en), 'be 动词叙述谓语应被转成短语');
+    assert.ok(/white shirt and jeans/.test(result.fields.outfit.en));
+    assert.ok(/reading a book by the window/i.test(result.fields.pose.en));
+    assert.ok(/a cafe in the morning/.test(result.fields.scene.en));
+    assert.ok(!/there is/i.test(result.fields.scene.en));
+    assert.ok(/soft window light/.test(result.fields.light.en));
+    assert.ok(!/picture shows/i.test(result.fields.light.en));
+    assert.ok(/no smoking/.test(result.negative.en), '负面提示词不能丢否定');
+
+    const assembled = Assemble.assemble(PromptFlow.normalizeSlots(result.fields), {
+      noLexicon: true,
+      quality: false
+    });
+    assertPromptStyle(assembled.positiveEn, '最终正面');
+    assertNoNarrativeOpeners(assembled.positiveEn, '最终正面');
+    assert.ok(/reading a book by the window/i.test(assembled.positiveEn), assembled.positiveEn);
+    assert.ok(/a cafe in the morning/.test(assembled.positiveEn), assembled.positiveEn);
+    assert.ok(/soft window light/.test(assembled.positiveEn), assembled.positiveEn);
+  });
+});
+
+test('句号换逗号不算修复：is/was 等叙述谓语必须被改写', function () {
+  const payload = successPayload();
+  payload.fields.person = {
+    zh: '年轻女人',
+    en: 'A young woman is sitting by the window and reading a book.'
+  };
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    const en = result.fields.person.en;
+    assertPromptStyle(en, 'person');
+    assert.ok(!/\bis sitting\b/i.test(en), en);
+    assert.ok(!/[.!?。！？]\s*$/.test(en), en);
+    assert.notStrictEqual(en, 'A young woman is sitting by the window and reading a book,');
+    assert.ok(/a young woman sitting by the window and reading a book/.test(en), en);
+  });
+});
+
+test('系统提示与重译提示都明确：逗号分隔提示词，禁止叙述句和套话', function () {
+  const retranslate = LocalLLM.buildRetranslateRequest(settings(), {
+    idea: '女人在窗边看书',
+    fields: { pose: { zh: '女人在窗边看书', en: 'woman reading a book by a window' } },
+    pending: ['pose'],
+    negative: { zh: '', en: '' }
+  });
+  [LocalLLM.buildSystemPrompt({ infer: false }), retranslate.body.messages[0].content]
+    .forEach(function (prompt) {
+      assert.ok(/逗号分隔/.test(prompt));
+      assert.ok(/不是英语叙述句|不是英语句子/.test(prompt));
+      ['A scene of', 'This image depicts', 'There is', 'The picture shows', 'In this image', 'A photograph of']
+        .forEach(function (phrase) { assert.ok(prompt.indexOf(phrase) !== -1, '缺少反例：' + phrase); });
+      assert.ok(/woman reading a book by a window/.test(prompt), '缺少动作短语正例');
+      assert.ok(/her friend sitting on a bench waiting for her/.test(prompt), '缺少多主体关系正例');
+      assert.ok(/句号换逗号但仍是完整句子/.test(prompt), '缺少「句号换逗号不合格」说明');
+    });
+});
+
+test('中文修改后重译：新英文仍是提示词短语，保留用户中文和动作关系', function () {
+  const slots = fieldState(successPayload());
+  slots.pose.zh = '女人转身走向街角，手里拿着一束花';
+  PromptFlow.markChineseEdited(slots, 'pose');
+  assert.deepStrictEqual(PromptFlow.pendingKeys(slots), ['pose']);
+  const response = {
+    fields: {
+      pose: {
+        zh: '站在樱花树下（模型初稿）',
+        en: 'The woman is turning toward the street corner, holding a bouquet.'
+      }
+    },
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' }
+  };
+  return LocalLLM.retranslate(settings(), {
+    idea: SUCCESS_IDEA,
+    fields: JSON.parse(JSON.stringify(slots)),
+    pending: ['pose'],
+    negative: { zh: '低质量、模糊、水印', en: 'low quality, blurry, watermark' }
+  }, {
+    fetchImpl: function () { return Promise.resolve(responseWith(JSON.stringify(response))); }
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assertPromptStyle(result.fields.pose.en, '重译 pose');
+    assert.ok(/turning toward the street corner/.test(result.fields.pose.en), result.fields.pose.en);
+    assert.ok(/holding a bouquet/.test(result.fields.pose.en), result.fields.pose.en);
+    assert.ok(!/\bis\b/i.test(result.fields.pose.en), result.fields.pose.en);
+
+    const applied = PromptFlow.applyEnglish(slots, result.fields, result.pending);
+    assert.strictEqual(applied.ok, true);
+    assert.strictEqual(slots.pose.zh, '女人转身走向街角，手里拿着一束花');
+    assert.deepStrictEqual(PromptFlow.pendingKeys(slots), []);
+
+    const assembled = Assemble.assemble(slots, { noLexicon: true, quality: false });
+    assertPromptStyle(assembled.positiveEn, '重译后最终正面');
+    assert.ok(/turning toward the street corner/.test(assembled.positiveEn), assembled.positiveEn);
+    assert.ok(/holding a bouquet/.test(assembled.positiveEn), assembled.positiveEn);
+  });
+});
+
+test('最终拼装：动作短语允许保留语法连接，关系与否定都不丢', function () {
+  const slots = PromptFlow.normalizeSlots({
+    person: { zh: '女人', en: 'A woman is standing beside a red car.' },
+    outfit: { zh: '白衬衫', en: 'wearing a white shirt' },
+    pose: {
+      zh: '女人站在红色汽车旁，她的朋友坐在长椅上等她',
+      en: 'The woman is standing beside a red car while her friend sits on a bench waiting for her.'
+    },
+    scene: { zh: '红色汽车和长椅', en: 'a red car and a bench' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  });
+  const assembled = Assemble.assemble(slots, { noLexicon: true, quality: false });
+  assertPromptStyle(assembled.positiveEn, '最终正面');
+  assertNoNarrativeOpeners(assembled.positiveEn, '最终正面');
+  assert.ok(/standing beside a red car/.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(/friend sitting on a bench waiting for her/.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(
+    /woman standing beside a red car/.test(assembled.positiveEn),
+    '人物与关系动作应连成短语，不能只剩孤立标签：' + assembled.positiveEn
+  );
+});
+
+test('多主体关系：pose 自带主体时不重复输出单独的人物列表', function () {
+  const slots = PromptFlow.normalizeSlots({
+    person: { zh: '一个女孩，她的朋友', en: 'a girl, her friend' },
+    outfit: { zh: '', en: '' },
+    pose: {
+      zh: '女孩站在红色汽车旁，朋友坐在长椅上等她',
+      en: 'a girl standing next to a red car, her friend sitting on a bench waiting for her'
+    },
+    scene: { zh: '红色汽车和长椅', en: 'a red car and a bench' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  });
+  const assembled = Assemble.assemble(slots, { noLexicon: true, quality: false });
+  assertPromptStyle(assembled.positiveEn, '多主体最终正面');
+  assert.strictEqual(
+    assembled.positiveEn,
+    'a girl standing next to a red car, her friend sitting on a bench waiting for her, a red car and a bench'
+  );
+});
+
+test('允许动作短语：woman reading a book by a window 不会被拆成单词标签', function () {
+  const slots = PromptFlow.normalizeSlots({
+    person: { zh: '女人', en: 'woman' },
+    outfit: { zh: '', en: '' },
+    pose: { zh: '在窗边看书', en: 'reading a book by a window' },
+    scene: { zh: '', en: '' },
+    light: { zh: '', en: '' },
+    style: { zh: '', en: '' }
+  });
+  const assembled = Assemble.assemble(slots, { noLexicon: true, quality: false });
+  assert.ok(/woman reading a book by a window/.test(assembled.positiveEn), assembled.positiveEn);
+  assert.ok(assembled.positiveEn.split(',').some(function (part) {
+    return part.trim().split(/\s+/).length > 1;
+  }), '不能强制每项只有一个词');
 });
 
 test('请求体：系统说明 + 用户原文，think:false、非流式，不包含词库', function () {
@@ -232,6 +441,19 @@ test('英文里残留中文 → 判为不可用，不把中文当英文', functi
   }).then(function (result) {
     assert.strictEqual(result.status, 'error');
     assert.strictEqual(result.code, 'missing-english');
+  });
+});
+
+test('模型用「无」表示空字段时不误报缺英文，空字段保持为空', function () {
+  const payload = successPayload();
+  payload.fields.person = { zh: '无', en: '' };
+  return LocalLLM.generate(settings(), SUCCESS_IDEA, {
+    fetchImpl: okFetch(payload)
+  }).then(function (result) {
+    assert.strictEqual(result.status, 'ok', result.reason + ' / ' + result.detail);
+    assert.strictEqual(result.fields.person.zh, '');
+    assert.strictEqual(result.fields.person.en, '');
+    assert.ok(/cream trench coat/.test(result.fields.outfit.en));
   });
 });
 

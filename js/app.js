@@ -1472,7 +1472,7 @@
       detail += '请在「连接设置」里填写完整的 http(s):// 地址。';
     }
     if (result && result.detail &&
-        ['invalid-json', 'invalid-spec', 'missing-english', 'inferred', 'empty-negative', 'server', 'empty-fields', 'missing-english'].indexOf(code) !== -1) {
+        ['invalid-json', 'invalid-spec', 'missing-english', 'narrative-english', 'inferred', 'empty-negative', 'server', 'empty-fields'].indexOf(code) !== -1) {
       detail += ' 细节：' + result.detail + '。';
     }
     return detail;

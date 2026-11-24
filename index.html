@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3eee2">
   <meta name="description" content="本机模型主流程的中文文生图提示词工作台：整体描述交给本机 Ollama 拆成六个中英对照字段，可直接改中文后重新生成英文；模型失败会报错并保留编辑，不静默回退词库。规则生成是明确标注的次要选项。">
   <title>大肥鱼 · 文生图提示词工坊</title>
-  <link rel="stylesheet" href="styles.css?v=20261124-1840">
+  <link rel="stylesheet" href="styles.css?v=20261124-1909">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -31,7 +31,7 @@
       <div class="hero-copy">
         <p class="eyebrow">中文想法 → SDXL / ComfyUI 英文提示词</p>
         <h1 id="hero-title">把一句想法，<br><em>拆成能生图的提示词。</em></h1>
-        <p class="lede">整段描述直接交给本机模型理解、拆成六个中英对照字段。哪段中文偏离原意就改哪段，再点「重新生成英文」；英文始终以你改过的中文为准，不会被偷偷改回去。模型不可用会明确报错并保留已有编辑，不会静默换成词库结果。</p>
+        <p class="lede">整段描述直接交给本机模型理解、拆成六个中英对照字段。模型给出的英文是可直接粘贴的生图提示词短语，不是英语句子翻译。哪段中文偏离原意就改哪段，再点「重新生成英文」；英文始终以你改过的中文为准，不会被偷偷改回去。模型不可用会明确报错并保留已有编辑，不会静默换成词库结果。</p>
       </div>
 
       <div class="idea-card">
@@ -68,7 +68,7 @@
         </label>
 
         <div class="local-llm">
-          <p class="local-llm-primary"><strong>主流程：本机 Ollama qwen3.5:4b</strong> · 模型自己理解、分解并翻译；请求不携带词库，也不用词库改写模型英文。失败只报错并保留编辑。</p>
+          <p class="local-llm-primary"><strong>主流程：本机 Ollama qwen3.5:4b</strong> · 模型自己理解、分解并翻译成逗号分隔的生图提示词短语，不是英语句子；请求不携带词库，也不用词库改写模型英文。失败只报错并保留编辑。</p>
           <details class="local-llm-config">
             <summary>连接设置（当前 Ollama 无鉴权，不需要密钥）</summary>
             <div class="local-llm-fields">
@@ -146,7 +146,7 @@
       <div class="generate-copy">
         <p class="eyebrow">第三步 · 组装</p>
         <h2 id="generate-title">生成最终提示词</h2>
-        <p>只用当前六个框里的英文组装。本地模型路径不查词库、不自动补质量词；有中文改了但英文还没重译时，会先拦住，避免复制过期英文。顺序为：人物 → 服装 → 姿态 → 场景 → 光线镜头 → 画风。</p>
+        <p>只用当前六个框里的英文组装。本地模型路径不查词库、不自动补质量词；有中文改了但英文还没重译时，会先拦住，避免复制过期英文。最终英文会再清洗成逗号分隔的提示词短语，不会把英语叙述句带进结果。顺序为：人物 → 服装 → 姿态 → 场景 → 光线镜头 → 画风。</p>
       </div>
       <div class="generate-actions">
         <button type="button" id="generateBtn" class="button button-dark button-large">生成正/负提示词 <span aria-hidden="true">→</span></button>
@@ -314,18 +314,18 @@
     <div class="noscript-warning">这个工具需要 JavaScript 才能在本地完成拆解和翻译，请在浏览器设置里开启 JavaScript。</div>
   </noscript>
 
-  <script src="js/utils.js?v=20261124-1840"></script>
-  <script src="js/lexicon.js?v=20261124-1840"></script>
-  <script src="js/translator.js?v=20261124-1840"></script>
-  <script src="js/scene.js?v=20261124-1840"></script>
-  <script src="js/parser.js?v=20261124-1840"></script>
-  <script src="js/slot-fill.js?v=20261124-1840"></script>
-  <script src="js/complete.js?v=20261124-1840"></script>
-  <script src="js/assemble.js?v=20261124-1840"></script>
-  <script src="js/negative.js?v=20261124-1840"></script>
-  <script src="js/feedback.js?v=20261124-1840"></script>
-  <script src="js/local-llm.js?v=20261124-1840"></script>
-  <script src="js/prompt-flow.js?v=20261124-1840"></script>
-  <script src="js/app.js?v=20261124-1840"></script>
+  <script src="js/utils.js?v=20261124-1909"></script>
+  <script src="js/lexicon.js?v=20261124-1909"></script>
+  <script src="js/translator.js?v=20261124-1909"></script>
+  <script src="js/scene.js?v=20261124-1909"></script>
+  <script src="js/parser.js?v=20261124-1909"></script>
+  <script src="js/slot-fill.js?v=20261124-1909"></script>
+  <script src="js/complete.js?v=20261124-1909"></script>
+  <script src="js/assemble.js?v=20261124-1909"></script>
+  <script src="js/negative.js?v=20261124-1909"></script>
+  <script src="js/feedback.js?v=20261124-1909"></script>
+  <script src="js/local-llm.js?v=20261124-1909"></script>
+  <script src="js/prompt-flow.js?v=20261124-1909"></script>
+  <script src="js/app.js?v=20261124-1909"></script>
 </body>
 </html>

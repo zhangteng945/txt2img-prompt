@@ -1110,3 +1110,234 @@ ok  app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）
 - 未把 `?v=` 改成未来时间戳；保持 `20261124-1440`。
 - 未 push、未发布 GitHub Pages。
 - 不宣称 99%。
+
+---
+
+## 8. 2026-11-24 19:11 本轮：英文必须是生图提示词短语
+
+### 8.1 结论与根因
+
+用户反馈的「正面提示词变成英语句子翻译」不是拼装顺序问题，而是英文来源的形态问题：
+
+- 旧系统提示只要求「自然、简洁、适合文生图逗号分隔提示词的英文」，没有明确禁止完整英语句子，也没有反例；
+- 重译提示没有说明 en 应该是提示词短语，模型会把改过的中文整句翻译成 `The woman is turning...`；
+- `assemble.js` 只按逗号和句号切分，句号被换成逗号后，完整叙述句仍会原样进入最终正面。
+
+本轮从三处统一：
+
+1. 初次拆解系统提示：明确 en 是逗号分隔的 SDXL / ComfyUI 提示词短语，不是英语叙述句；给出合格示例、反例、动作短语和多主体关系示例。
+2. 逐字段重译提示：同样明确形态要求，重译的新英文也必须是短语；保留用户当前中文、动作对象、关系、方位和否定。
+3. 最终拼装：`utils.js` 新增共享的提示词化清洗与形态校验；`assemble.js` 在拼装前再清洗一次，并去掉被「主体 + 动作」短语覆盖的单独主体列表。
+
+清洗只改变英文表达形态，不翻译、不读取词库，不增删用户没说的画质、镜头、身份、人数、服装或剧情。本地模型仍是主流程；失败仍清楚报错并保留编辑，不自动回退规则。
+
+### 8.2 具体修改
+
+- `js/local-llm.js`
+  - 重写初次拆解系统提示的英文形态约束和示例。
+  - 重译提示加入相同的形态约束、动作短语/关系句示例。
+  - 模型英文进入六框前调用 `U.promptifyEnglish`；如果清洗后仍是叙述句，返回明确的 `narrative-english` 错误，不把叙述句当成功结果。
+  - 模型用「无」表示空字段时按空字段处理，避免误报「中文缺少可用英文」。
+- `js/utils.js`
+  - 新增 `stripPromptLeadIns`、`convertNarrativeClause`、`promptPhrases`、`promptifyEnglish`、`isNarrativeStyle`、`isPromptStyle`。
+  - 去掉 `A scene of` / `This image depicts` / `There is` / `The picture shows` / `In this image` / `A photograph of` 等叙述套话；去掉 be 动词/助动词，把 `A woman is sitting...` 转成 `a woman sitting...`；把 `while` 连接的并列叙述改成逗号分隔短语。
+  - 保留介词、动作对象、动作主体和否定；允许 `woman reading a book by a window` 这种动作短语，不强制每个字段只有一个词。
+- `js/assemble.js`
+  - 字段英文先经过 `promptPhrases`，最终整段再经过 `promptifyEnglish`。
+  - 多主体时，模型按新提示词会在 pose 重复主体；装配会去掉前面单独列出的 `a girl` / `her friend`，保留带动作的完整短语，避免重复。
+- `js/app.js`
+  - 错误详情列表加入 `narrative-english`，页面仍显示具体原因。
+- `tests/local-llm.test.js`
+  - 增加初次拆解、句号换逗号、系统/重译提示、改中文重译、多主体关系、最终拼装、动作短语、空字段「无」等回归；全部使用 mock fetch。
+- `README.md` / `index.html` / 本报告
+  - 写明模型输出的是生图提示词短语，不是英语句子翻译。
+
+### 8.3 真实本机 API 实测
+
+环境：本机 Ollama，`https://macbook-pro.tail349cac.ts.net:11434`，模型 `qwen3.5:4b`，`think:false`，`temperature:0`。未启动 Lustify / ComfyUI / SDXL 生图，未改任何系统服务配置。以下均为模型实际返回经当前本地模型校验、装配后的结果，未改写英文。
+
+#### 例 1：人物动作 + 场景 + 光线
+
+- 输入整体中文：`清晨的咖啡馆，短发女孩坐在窗边看书，白衬衫和牛仔裤，柔和窗光`
+- 最终正面英文全文：
+  `a girl with short hair, white shirt and jeans, sitting by a window reading a book, morning cafe, soft window light`
+- 中文对照：`人物与外貌：短发女孩；服装与造型：白衬衫和牛仔裤；姿态与动作：坐在窗边看书；场景与背景：清晨的咖啡馆；光线与镜头：柔和窗光`
+- 最终负面英文：`low quality, blurry, watermark`
+- 最终负面中文：`低质量、模糊、水印`
+- 改中文重译：是（见本节末尾）。
+
+#### 例 2：多主体关系 / 谁对谁做什么
+
+- 输入整体中文：`一家三口在公园野餐，父亲在铺毯子，母亲在摆食物，孩子在旁边跑`
+- 最终正面英文全文：
+  `a family of three, father, mother, child, a father spreading a blanket, a mother arranging food, a child running beside them, picnic in a park`
+- 中文对照：`人物与外貌：一家三口：父亲、母亲、孩子；姿态与动作：父亲在铺毯子，母亲在摆食物，孩子在旁边跑；场景与背景：公园野餐`
+- 最终负面英文：`low quality, blurry, watermark`
+- 最终负面中文：`低质量、模糊、水印`
+- 改中文重译：无。
+
+#### 例 3：否定 / 禁止出现文字和水印
+
+- 输入整体中文：`窗外下着雨的街道，一只橘猫趴在窗台上晒太阳，不要文字，不要水印`
+- 最终正面英文全文：
+  `an orange cat lying on a windowsill, rainy street outside the window, no text`
+- 中文对照：`姿态与动作：一只橘猫趴在窗台上；场景与背景：窗外下着雨的街道，无文字`
+- 最终负面英文：`text, watermark, low quality`
+- 最终负面中文：`文字、水印、低质量`
+- 改中文重译：无。
+- 说明：`no text` 保留在正面场景约束中，`text, watermark` 同时进入负面，否定没有被翻成肯定。
+
+#### 例 4：禁止吸烟告示牌
+
+- 输入整体中文：`街边店门口立着一块禁止吸烟的告示牌，一个穿蓝色外套的男人从旁边走过`
+- 最终正面英文全文：
+  `a man wearing a blue jacket walking past, street side shop entrance, no smoking sign`
+- 中文对照：`人物与外貌：穿蓝色外套的男人；服装与造型：蓝色外套；姿态与动作：从旁边走过；场景与背景：街边店门口，禁止吸烟告示牌`
+- 最终负面英文：`low quality, blurry, watermark`
+- 最终负面中文：`低质量、模糊、水印`
+- 改中文重译：无。
+- 说明：`no smoking sign` 保留告示牌语义，没有退化成单纯 `smoking`。
+
+#### 例 5：谁在谁旁边、谁等谁
+
+- 输入整体中文：`一个女孩站在红色汽车旁，她的朋友坐在长椅上等她`
+- 最终正面英文全文：
+  `a girl standing next to a red car, her friend sitting on a bench waiting for her, a red car and a bench`
+- 中文对照：`人物与外貌：一个女孩，她的朋友；姿态与动作：女孩站在红色汽车旁，朋友坐在长椅上等她；场景与背景：红色汽车和长椅`
+- 最终负面英文：`low quality, blurry, watermark`
+- 最终负面中文：`低质量、模糊、水印`
+- 改中文重译：无。
+- 说明：pose 里重复的主体与动作被保留，前面单独列出的 `a girl` / `her friend` 已被装配去重。
+
+#### 例 6：改一处中文后重译
+
+- 原始输入：`清晨的咖啡馆，短发女孩坐在窗边看书，白衬衫和牛仔裤，柔和窗光`
+- 修改字段：`pose.zh` 改为 `女人合上书，起身走向咖啡馆门口`
+- 重译请求：`pending: ["pose"]`；带原始描述、六个当前中文字段、六个当前英文字段和当前 negative。
+- 重译状态：`ok`，耗时约 4.6 秒。
+- 重译返回的 pose 英文：`closing the book, standing up and walking towards the cafe door`
+- 应用后 pose 中文：`女人合上书，起身走向咖啡馆门口`（没有被改回初稿）
+- 重译后的最终正面英文全文：
+  `a girl with short hair, white shirt and jeans, closing the book, standing up and walking towards the cafe door, morning cafe, soft window light`
+- 重译后中文对照：`人物与外貌：短发女孩；服装与造型：白衬衫和牛仔裤；姿态与动作：女人合上书，起身走向咖啡馆门口；场景与背景：清晨的咖啡馆；光线与镜头：柔和窗光`
+- 重译后最终负面英文：`low quality, blurry, watermark`
+- 六字段与最终正面的形态检查：全部 pass（无叙述句/无叙述套话）。
+
+实测原始输出另存于 `logs/live-prompt-style-1911.txt`（文本记录，不是测试替身）。
+
+### 8.4 指定测试完整输出
+
+命令（项目根目录）：
+
+```bash
+node tests/core.test.js
+node tests/local-llm.test.js
+```
+
+`node tests/core.test.js`：
+
+```text
+ok  词典规模落在覆盖率最佳点
+ok  中文短语按语境翻译
+ok  英文反向翻译自然且可对照
+ok  高频中文外貌说法必须命中正确规范词并译出英文
+ok  高频英文外貌词及人物组合必须命中正确类别
+ok  示例想法拆进六个框
+ok  关系句式先拆角色再组装：给…上 / 对着 / 在…上
+ok  关系句按角色分框：动作留姿态，地点进场景，最终英文仍自然
+ok  日常高频动作、物体、动物和氛围都能独立命中
+ok  换词回归：换物体、动物、动作、氛围后关键零件仍然命中
+ok  公共标识固定短语整条命中，不被动作词拆丢
+ok  禁止吸烟与吸烟是两条语义，禁止吸烟不得退成单纯 smoking
+ok  本轮新增规范词都保持唯一并能中英互译回自己
+ok  短别名不切开长词：拒绝抽烟的广告拆成主题动作 + 媒介
+ok  短别名边界：搞笑画面不拆出 smiling，香烟/小猫在边界仍命中
+ok  通用短别名边界规则：所有单字别名都不能从复合词中间命中
+ok  英文短词不能切开带连字符的长词
+ok  补全默认关闭，显式开启后才在缺失维度发生并留下记录
+ok  已有光线镜头时不重复补全
+ok  未收录内容保留原文并提示
+ok  纯英文提示词也能分框
+ok  组装顺序和用户修改生效
+ok  负面提示词覆盖常见问题并能避让冲突
+ok  复杂服装、材质、发型、光效、镜头和场景都能命中
+ok  重复片段不会重复组装
+ok  未收录待补录：过滤纯标点、同词去重、累计次数并保留最近上下文
+ok  待补录导出符合固定 schema，字段齐全且文件名稳定
+ok  补录清单同时含 Markdown 与 JSON，并可预填 GitHub issue
+ok  当前词库已命中的待补录词可标记，备注、删除和本机存储可往返
+ok  结构化场景：长发女孩穿着白色连衣裙是对象-属性-关系，不是扁平标签
+ok  对象-属性-关系：红衣女孩站在蓝色汽车旁，远处有一座白色房子
+ok  否定、并列、转折与作用范围：局部否定不升级成全局 blur
+ok  肢体动作：女人张开五指拆成主体 + 手部动作，不残留中文或 pointing forward
+ok  动作与地点分框，英文从同一结构自然生成
+ok  多候选切分保留歧义，不在长词上直接拍板
+ok  语义守恒检查：否定变肯定、未翻译残留和擅自补光都会阻止完整
+
+36 tests passed.
+```
+
+`node tests/local-llm.test.js`：
+
+```text
+ok  成功：整体描述拆成六字段中英对照、负向提示词，英文直接来自模型
+ok  成功路径不调用 Translator / 词库补英文
+ok  成功路径不调用 Parser / 规则编译器（不静默走规则）
+ok  提示词形态：初次拆解的字段英文和最终正面都是逗号分隔短语，不是叙述句
+ok  句号换逗号不算修复：is/was 等叙述谓语必须被改写
+ok  系统提示与重译提示都明确：逗号分隔提示词，禁止叙述句和套话
+ok  中文修改后重译：新英文仍是提示词短语，保留用户中文和动作关系
+ok  最终拼装：动作短语允许保留语法连接，关系与否定都不丢
+ok  多主体关系：pose 自带主体时不重复输出单独的人物列表
+ok  允许动作短语：woman reading a book by a window 不会被拆成单词标签
+ok  请求体：系统说明 + 用户原文，think:false、非流式，不包含词库
+ok  补全开关：关闭时提示不要补，开启时只允许 light/style
+ok  think 标签与代码围栏残留会被清掉，JSON 仍可解析
+ok  无效 JSON → status:error / invalid-json，不伪造 fallback
+ok  中文有内容但英文缺失 → status:error / missing-english，绝不用词库补
+ok  英文里残留中文 → 判为不可用，不把中文当英文
+ok  模型用「无」表示空字段时不误报缺英文，空字段保持为空
+ok  缺少英文负向提示词 → status:error / empty-negative
+ok  补全默认关闭：模型返回 inferred 时拒绝，避免把推测当原文
+ok  补全开启：light 允许 inferred 并标记；人物补全仍拒绝
+ok  补全开启也只允许 light/style：inferred 里出现 person 直接报错
+ok  超时 → status:error / timeout，挂起 fetch 被中止；不返回规则结果
+ok  网络错误 → status:error / network，并提示模型没开/休眠/Tailscale/跨域
+ok  HTTP 403 → status:error / cors，不返回任何槽位
+ok  中文改动 → 对应英文 stale；重译成功更新英文且保留用户中文
+ok  中文清空 → 英文标 stale；重译返回空英文时清空对应英文，其他字段不动
+ok  重译失败（网络）保留已有中文、英文和 stale 标记，不自动用词库
+ok  重译结果缺 pending 字段 → error / missing-english，整体不落盘
+ok  重译超时 → error / timeout，已有编辑不变
+ok  规则路径只在显式调用时执行：模型失败后手动跑 Parser 仍可用
+ok  设置读写：默认主流程、infer 默认关闭、旧 enabled:false 不再关掉模型
+ok  历史兼容：旧记录 pendingEnglish 会恢复为字段 stale
+ok  中文改动 / 英文手改的 stale 规则可逆，重译只碰传入字段
+ok  app.js 的主流程失败路径不调用 fillFromParsed（静态护栏）
+
+34 tests passed.
+```
+
+另外跑了一次临时 jsdom 页面冒烟（脚本不随项目发布）：初次拆解填充六框 → 改 pose 中文标「待更新」→ 重译只更新 pose 英文且保留改过的中文 → 生成最终正面为提示词短语 → 收藏和历史写入成功。输出：
+
+```text
+ok 初次拆解填充六框
+ok 改中文标英文待更新
+ok 重译更新英文且保留中文
+ok 生成最终正面是提示词短语
+ok 收藏与历史仍保存
+ALL UI CHECKS PASSED
+```
+
+### 8.5 保持不变的行为与边界
+
+- 本地模型仍是主流程；成功路径不读取、不发送、不调用词库，不用词库改写模型英文。
+- 中文仍是用户权威：改中文后对应英文 `stale`，重译只更新待更新字段；模型回写中文会被忽略。
+- 模型失败 / 断网 / 超时 / 返回叙述句：明确报错并保留已有编辑；不静默回退词库，规则路径仍只能由用户显式点击「改用规则生成（次要）」。
+- 搜索、收藏、历史、复制、预览未改坏；本轮未改词库内容。
+- 未训练/微调模型，未改 Ollama 模型文件，未拉取或删除模型。
+- 未改 Tailscale / Ollama 系统配置（Host 改写代理、Serve、CORS、`keep_alive`），未绑 `0.0.0.0`，未开 Funnel。
+- 未启动、停止或卸载 Ollama / Lustify / ComfyUI，未启动 SDXL 生图。
+- 未把 `?v=` 改成未来时间戳；`index.html` 仍保持本轮开始前的 `20261124-1840`。
+- 未 push、未发布 GitHub Pages。
+- 不宣称 99%；真实 API 实测只覆盖上述小型非敏感例子。

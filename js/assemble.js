@@ -24,7 +24,9 @@
   const NON_PHOTO_RE = /(anime|manga|illustration|watercolor|oil painting|3d render|cgi|concept art|digital painting|low poly|pixel art|claymation|ink painting|ukiyo-e|comic|cartoon|clay|surrealism)/i;
 
   function phrasesOf(text) {
-    return U.splitPhrases(text)
+    // 最终拼装也做一次防御性提示词化：旧收藏、手改英文或模型偶发叙述句
+    // 都不能把 "A scene of ... is ..." 原样带进最终正面提示词。
+    return U.promptPhrases(text)
       .map(function (p) { return U.cleanEnglish(p); })
       .filter(function (p) { return p && p.replace(/[,\s]/g, ''); });
   }
@@ -67,6 +69,29 @@
 
   // 日常动物主体：只补真实摄影质感，不补人像皮肤纹理。
   const ANIMAL_SUBJECT_RE = /\b(?:cat|dog|puppy|kitten|rabbit|bunny|fox|deer|horse|bird|butterfly|dragon|wolf|shiba|retriever|golden retriever|corgi|poodle|husky|samoyed|collie|labrador|shepherd|bichon|pomeranian|ragdoll|shorthair|siamese|persian|maine coon|tabby|tuxedo|hamster|guinea pig|squirrel|hedgehog|parrot|pigeon|duck|chicken|goose|pig|cow|sheep|goat|donkey|camel|panda|monkey|elephant|lion|tiger|bear|penguin|dolphin|whale|shark|sea turtle|octopus|crab|frog|snake|lizard|spider|ant|bee|dragonfly|goldfish|koi)\b/i;
+
+  // 两个主体时，模型按提示词形态会在 pose 里重复主体：
+  // person: a girl, her friend
+  // pose:   a girl standing next to a red car, her friend sitting on a bench
+  // 最终应保留 pose 里带动作的完整短语，去掉前面单独列出的 a girl / her friend，
+  // 否则会变成 "a girl, her friend, a girl standing..." 的重复。
+  function isRedundantSubject(subject, actionPhrase) {
+    if (subject === actionPhrase) return false;
+    if (/\b[a-z]+ing\b/i.test(subject)) return false;
+    const left = subject.toLowerCase();
+    const right = actionPhrase.toLowerCase();
+    if (right.indexOf(left + ' ') !== 0) return false;
+    const rest = actionPhrase.slice(subject.length + 1);
+    return /^[a-z]+ing\b/i.test(rest);
+  }
+
+  function dropRedundantSubjects(phrases) {
+    return phrases.filter(function (phrase, index) {
+      return !phrases.some(function (other, otherIndex) {
+        return otherIndex !== index && isRedundantSubject(phrase, other);
+      });
+    });
+  }
 
   function selectQuality(styleText, allText, hasPerson) {
     const nonPhoto = NON_PHOTO_RE.test(styleText);
@@ -168,7 +193,9 @@
       });
     }
 
-    const positiveEn = U.joinPhrasesEn(phrases);
+    // 去掉被后面「主体 + 动作」短语覆盖的单独主体，再做一次形态清洗。
+    const finalPhrases = dropRedundantSubjects(phrases);
+    const positiveEn = U.promptifyEnglish(U.joinPhrasesEn(finalPhrases));
     const positiveZh = zhSections
       .filter(function (section) { return section.zh; })
       .map(function (section) { return section.label + '：' + section.zh; })
@@ -183,7 +210,7 @@
       quality: quality,
       qualityZh: quality.map(function (term) { return QUALITY_ZH[term] || term; }),
       hasUntranslated: U.hasCjk(positiveEn),
-      phraseCount: phrases.length
+      phraseCount: finalPhrases.length
     };
   }
 

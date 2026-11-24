@@ -65,7 +65,16 @@
   const BASE_PROMPT = [
     '你是中文文生图提示词的理解、拆解与翻译器。只输出一个 JSON 对象；不要 Markdown、代码围栏、解释或 <think> 标签。',
     '',
-    '任务：读懂用户的整段中文描述，把它拆成六个中英对照字段，并由你自己把每个中文字段翻译成自然、简洁、适合文生图逗号分隔提示词的英文。',
+    '任务：读懂用户的整段中文描述，把它拆成六个中英对照字段，并由你自己把每个中文字段翻译成可直接粘贴到 Lustify Endgame（SDXL）/ ComfyUI 的英文生图提示词。',
+    '',
+    '英文 en 的产品形态（最重要，必须遵守）：',
+    '- en 是逗号分隔的英文生图关键词/短语，不是英语叙述句，也不是把中文整句逐字翻译成句子。',
+    '- 合格示例：short-haired woman, white shirt, jeans, reading a book by a window, morning cafe, soft window light',
+    '- 允许用必要语法绑定谁做什么、在哪里：woman reading a book by a window；不要机械删掉介词，也不要把关系拆成孤立单词。',
+    '- 有两个以上主体时，pose 的每个动作短语必须写清谁做什么：a girl standing next to a red car, her friend sitting on a bench waiting for her；不能只写 standing..., sitting...。人物已在 person 出现，也要在 pose 重复主体。',
+    '- 禁止完整叙述句：不要写 A young woman is sitting by the window and reading a book.；也不要用 A scene of / This image depicts / There is / The picture shows / In this image / A photograph of 作为句子主体。',
+    '- 每个 en 可以有多条逗号分隔短语；不要写成一段话，不要用句号结尾。句号换逗号但仍是完整句子的写法不合格。',
+    '- 关系、动作主体/对象、方位和否定不能丢；否定按第 5 条放进 negative。',
     '',
     '六个字段（JSON key 固定）：',
     '- person：人物与外貌。身份、年龄、脸型、发型发色、眼睛、表情、妆容。',
@@ -76,8 +85,8 @@
     '- style：画风与质感。摄影风格、电影感、胶片、调色、画风、质感。',
     '',
     '硬规则：',
-    '1. 每个字段的 zh 用简洁中文写该维度的完整内容；要保留动作的主体/对象、否定、关系和范围，不能只剩孤立词标签。',
-    '2. 每个非空 zh 必须配 en；en 是你按整段上下文自己翻译的英文，不是中文标签的字面堆叠。',
+    '1. 每个字段的 zh 也用简洁中文短语/短句写该维度内容；保留动作的主体/对象、否定、关系和范围，不写散文段落。',
+    '2. 每个非空 zh 必须配 en；en 是你按整段上下文写出的英文提示词短语，不是中文标签的字面堆叠。',
     '3. 不要参照、检索或模仿任何外部词库、词典或固定译法；同一个中文词在不同上下文里可以译成不同英文。',
     '4. 不要编造用户没说的光线、镜头、景深、画风、身份、人数、服装、颜色、动作、视线、侧脸、表情或剧情。用户没提的字段留空字符串。',
     '4b. 光线/晨光/窗光只放 light，不要写进 scene；scene 只写地点、时间、天气和背景元素。不要把动作重复塞进 person 或 scene。',
@@ -100,9 +109,20 @@
     ' "notes": []',
     '}',
     '',
+    '英文形态对照（只示范写法，不要照抄内容）：',
+    '不合格：A scene of a young woman. She is sitting by the window and reading a book.',
+    '合格：young woman, sitting by the window, reading a book, morning cafe, soft window light',
+    '关系句合格：a girl standing next to a red car, her friend sitting on a bench waiting for her',
+    '',
+    '输出前自查：每个非空 en 都不能是完整英语句子（不能出现主语 + is/are/was/were 的叙述），也不能只有 standing/sitting 而看不出谁在做；否定、动作对象和关系不能丢。',
+    '',
     '示例（只示范粒度，不要照抄内容）：',
     '用户：短发女人穿米色风衣站在樱花树下，柔和自然光',
-    '输出：{"fields":{"person":{"zh":"短发女人","en":"a woman with a short bob"},"outfit":{"zh":"米色风衣","en":"wearing a cream trench coat"},"pose":{"zh":"站在樱花树下","en":"standing beneath a cherry tree"},"scene":{"zh":"樱花树下","en":"beneath a cherry tree"},"light":{"zh":"柔和自然光","en":"soft natural light"},"style":{"zh":"","en":""}},"negative":{"zh":"低质量、模糊、水印","en":"low quality, blurry, watermark"},"inferred":[],"notes":[]}'
+    '输出：{"fields":{"person":{"zh":"短发女人","en":"a woman with a short bob"},"outfit":{"zh":"米色风衣","en":"wearing a cream trench coat"},"pose":{"zh":"站在樱花树下","en":"standing beneath a cherry tree"},"scene":{"zh":"樱花树下","en":"beneath a cherry tree"},"light":{"zh":"柔和自然光","en":"soft natural light"},"style":{"zh":"","en":""}},"negative":{"zh":"低质量、模糊、水印","en":"low quality, blurry, watermark"},"inferred":[],"notes":[]}',
+    '',
+    '多主体关系示例（只示范如何把「谁做什么」留在 pose 里，不要照抄内容）：',
+    '用户：一个女孩站在红色汽车旁，她的朋友坐在长椅上等她',
+    '输出：{"fields":{"person":{"zh":"一个女孩，她的朋友","en":"a girl, her friend"},"outfit":{"zh":"","en":""},"pose":{"zh":"女孩站在红色汽车旁，朋友坐在长椅上等她","en":"a girl standing next to a red car, her friend sitting on a bench waiting for her"},"scene":{"zh":"红色汽车和长椅","en":"a red car and a bench"},"light":{"zh":"","en":""},"style":{"zh":"","en":""}},"negative":{"zh":"低质量、模糊、水印","en":"low quality, blurry, watermark"},"inferred":[],"notes":[]}'
   ];
 
   const INFER_ON = [
@@ -121,13 +141,28 @@
     '',
     '用户已经改过某些字段的中文。现在必须以 current_fields 里的当前中文为唯一依据重新翻译英文，并带上 original_idea 与其余字段作为上下文。',
     '',
+    '英文 en 的产品形态（最重要，必须遵守）：',
+    '- en 是可直接粘贴到 Lustify Endgame（SDXL）/ ComfyUI 的逗号分隔英文生图关键词/短语，不是英语叙述句，也不是中文整句的逐字翻译。',
+    '- 合格示例：short-haired woman, white shirt, jeans, reading a book by a window, morning cafe, soft window light',
+    '- 允许用必要语法绑定谁做什么、在哪里：woman reading a book by a window；不要机械删掉介词，也不要把关系拆成孤立单词。',
+    '- 有两个以上主体时，pose 的每个动作短语必须写清谁做什么：a girl standing next to a red car, her friend sitting on a bench waiting for her；不能只写 standing..., sitting...。人物已在 person 出现，也要在 pose 重复主体。',
+    '- 禁止完整叙述句：不要写 A young woman is sitting by the window and reading a book.；也不要用 A scene of / This image depicts / There is / The picture shows / In this image / A photograph of 作为句子主体。',
+    '- 每个 en 可以有多条逗号分隔短语；不要写成一段话，不要用句号结尾。句号换逗号但仍是完整句子的写法不合格。',
+    '',
     '硬规则：',
     '1. 绝不修改、回写或猜测中文；不要输出新的中文内容替代 current_fields。不要把用户改过的中文改回最初的整体描述或模型初稿。',
-    '2. 对 pending 里的每个字段，必须给出准确英文 en；也要给其余非空字段的 en 作为上下文（页面只会更新 pending 字段）。',
-    '3. 保持动作的主体/对象、否定、关系、方位和范围，不能只剩孤立英文标签。',
+    '2. 对 pending 里的每个字段，必须给出准确英文提示词短语 en；也要给其余非空字段的 en 作为上下文（页面只会更新 pending 字段）。',
+    '3. 保持动作的主体/对象、否定、关系、方位和范围，不能只剩孤立英文标签，也不能丢否定。',
     '4. 不要添加 current_fields 中文里没有的身份、人数、服装、颜色、动作、剧情、光线、镜头或画风。',
     '5. 不要参照、检索或模仿任何外部词库、词典或固定译法。',
     '6. 同时给出可直接粘贴的 negative 英文与中文对照；不要和当前正面内容冲突。',
+    '',
+    '英文形态示例（只示范写法）：',
+    '不合格：The woman is sitting by the window and she is reading a book.',
+    '合格：woman sitting by the window, reading a book, soft window light',
+    '关系句合格：a girl standing next to a red car, her friend sitting on a bench waiting for her',
+    '',
+    '输出前自查：每个非空 en 都不能是完整英语句子（不能出现主语 + is/are/was/were 的叙述），也不能只有 standing/sitting 而看不出谁在做；否定、动作对象和关系不能丢。',
     '',
     '输出结构：',
     '{"fields":{"person":{"en":"..."},"outfit":{"en":"..."},"pose":{"en":"..."},"scene":{"en":"..."},"light":{"en":"..."},"style":{"en":"..."}},"negative":{"zh":"中文对照","en":"low quality, blurry, watermark"},"notes":[]}'
@@ -146,6 +181,7 @@
     'invalid-json': '本地模型返回的不是有效 JSON',
     'invalid-spec': '本地模型返回的字段不完整或英文不可用',
     'missing-english': '某些中文片段没有可用的英文',
+    'narrative-english': '本地模型返回的英文仍是叙述句，不是生图提示词短语',
     inferred: '模型补全了未提示要素，但「允许模型推测」处于关闭状态',
     'empty-negative': '本地模型没有给出可用的英文负面提示词',
     'no-pending': '没有需要重新生成英文的字段',
@@ -154,6 +190,13 @@
   };
 
   const INFERRABLE = ['light', 'style'];
+  // 模型有时用「无」表示这个字段没有内容；不能把它当成有中文却缺英文。
+  const EMPTY_FIELD_RE = /^(?:无|没有|暂无|不适用|不涉及|none|n\/a|null|[-—–]+|（无）|\(无\))$/i;
+
+  function fieldZh(value) {
+    const text = asText(value);
+    return EMPTY_FIELD_RE.test(text) ? '' : text;
+  }
 
   function reasonText(code) {
     return REASONS[code] || REASONS.unexpected;
@@ -303,13 +346,25 @@
   }
 
   function cleanEn(value) {
-    return U.cleanEnglish(asText(value));
+    // 模型偶尔会把中文整句翻译成英语叙述句；在进入六框前压成提示词短语。
+    // 这里只做形态清洗，不翻译、不增删内容，也不读取词库。
+    return U.promptifyEnglish(asText(value));
   }
 
   function usableEn(value) {
     const text = cleanEn(value);
     if (!text || U.hasCjk(text) || !U.hasLatin(text)) return '';
     return text;
+  }
+
+  function assertPromptStyle(en, key) {
+    if (!U.isPromptStyle(en)) {
+      throw codedError(
+        'narrative-english',
+        (SLOT_LABELS[key] || key) + ' 的英文仍是叙述句，不能直接作为 SDXL/ComfyUI 提示词（' + snippet(en) + '）'
+      );
+    }
+    return en;
   }
 
   function normalizeKey(key) {
@@ -391,8 +446,8 @@
 
     SLOTS.forEach(function (key) {
       const source = fields[key] || {};
-      const zh = asText(source.zh);
-      const en = cleanEn(source.en);
+      const zh = fieldZh(source.zh);
+      const en = usableEn(source.en);
       if (!zh && !en) {
         out[key] = { zh: '', en: '', inferred: false };
         return;
@@ -401,9 +456,10 @@
       if (!zh) {
         throw codedError('invalid-spec', SLOT_LABELS[key] + ' 只有英文，没有中文对照');
       }
-      if (!usableEn(source.en)) {
+      if (!en) {
         throw codedError('missing-english', SLOT_LABELS[key] + ' 的中文缺少可用英文（' + zh + '）');
       }
+      assertPromptStyle(en, key);
       out[key] = { zh: zh, en: en, inferred: inferred.indexOf(key) !== -1 };
       if (out[key].inferred) inferredCount += 1;
     });
@@ -454,6 +510,7 @@
         missing.push(SLOT_LABELS[key] || key);
         return;
       }
+      assertPromptStyle(en, key);
       out[key] = { en: en };
     });
     if (missing.length) {
